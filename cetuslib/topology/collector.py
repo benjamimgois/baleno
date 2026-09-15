@@ -150,8 +150,16 @@ def _oid_suffix(oid: str, prefix: str) -> list[str]:
 
 def _guess_role(sys_descr: str) -> DeviceRole:
     d = sys_descr.lower()
+    if 'firewall' in d or 'fortigate' in d or 'fortinet' in d \
+            or 'palo alto' in d or 'firepower' in d or 'cisco asa' in d:
+        return DeviceRole.FIREWALL
     if 'access point' in d or 'wireless' in d or ' aironet' in d or 'wlan' in d:
         return DeviceRole.AP
+    if 'camera' in d or 'cctv' in d or 'ip camera' in d or 'nvr' in d \
+            or 'surveillance' in d:
+        return DeviceRole.CAMERA
+    if 'cloud' in d or 'internet' in d or 'wan accelerator' in d:
+        return DeviceRole.CLOUD
     if 'router' in d or 'routeros' in d or 'ios-xr' in d or 'junos' in d:
         return DeviceRole.ROUTER
     if 'switch' in d or 'ios-xe' in d or 'fabric' in d or 'nexus' in d \
@@ -290,6 +298,29 @@ class LldpCollector:
             pass
         return out
 
+    async def _walk_raw(self, engine, auth, target, oid: str) -> list[tuple[str, bytes]]:
+        """Like :meth:`_walk` but returns raw octets (for OIDs that hold a
+        binary value such as an IP address, where hex-formatting would corrupt
+        the address)."""
+        from pysnmp.hlapi.v3arch.asyncio import (
+            ContextData, ObjectType, ObjectIdentity, walk_cmd,
+        )
+        out: list[tuple[str, bytes]] = []
+        try:
+            async for (err_ind, err_stat, _, var_binds) in walk_cmd(
+                    engine, auth, target, ContextData(),
+                    ObjectType(ObjectIdentity(oid)), lexicographicMode=False):
+                if err_ind or err_stat:
+                    break
+                for vb in var_binds:
+                    try:
+                        out.append((str(vb[0]), vb[1].asOctets()))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return out
+
     # ── table builders ────────────────────────────────────────────────────
 
     async def _fill_interfaces(self, engine, auth, target, device: Device) -> None:
@@ -365,9 +396,11 @@ class LldpCollector:
             except ValueError:
                 continue
 
-        # Management addresses (IPv4 only, subtype == 1)
+        # Management addresses (IPv4 only, subtype == 1).  The raw octets are
+        # decoded as a network address; formatting them as a generic OctetString
+        # would hex-encode the IP and break correlation + level assignment.
         mgmt: dict[tuple[int, int], str] = {}
-        for full_oid, val in await self._walk(engine, auth, target, OID_REM_MAN_ADDR):
+        for full_oid, raw in await self._walk_raw(engine, auth, target, OID_REM_MAN_ADDR):
             suffix = _oid_suffix(full_oid, OID_REM_MAN_ADDR)
             if len(suffix) < 4:
                 continue
@@ -377,7 +410,7 @@ class LldpCollector:
             except ValueError:
                 continue
             if subtype == 1:
-                mgmt[(local_port, rem_index)] = val
+                mgmt[(local_port, rem_index)] = _net_addr(raw)
 
         neighbors: list[LldpNeighbor] = []
         for (local_port, rem_index), row in rows.items():

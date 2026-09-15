@@ -14,6 +14,8 @@ thread never blocks.
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from collections import deque
 from dataclasses import replace
 from typing import Optional
@@ -112,6 +114,7 @@ class TopologyDiscoveryWorker(QThread):
                         worklist.append(mgmt)
 
             self._add_placeholders(devices)
+            self._resolve_missing_ips(devices)
 
             self.progress.emit(90, "Building topology graph…")
             graph = TopologyEngine().build(devices, seed_networks=self.networks)
@@ -221,3 +224,53 @@ class TopologyDiscoveryWorker(QThread):
                 self.device_found.emit(placeholder)
 
         devices.extend(added)
+
+    # ── IP resolution fallback ────────────────────────────────────────────
+
+    def _resolve_missing_ips(self, devices: list[Device]) -> None:
+        """Fill in missing management IPs via DNS, restricted to the seed nets.
+
+        Some devices advertise no LLDP management address (and may drop ICMP),
+        so their IP is unknown.  If their hostname resolves to an address inside
+        one of the seed networks, assign it — this keeps level-1 devices from
+        being misclassified as level 2.
+        """
+        subnets: list[ipaddress._BaseNetwork] = []
+        for entry in self.networks:
+            entry = (entry or '').strip()
+            if not entry:
+                continue
+            try:
+                subnets.append(ipaddress.ip_network(entry, strict=False))
+            except ValueError:
+                try:
+                    subnets.append(ipaddress.ip_network(entry + '/32', strict=False))
+                except ValueError:
+                    continue
+        if not subnets:
+            return
+
+        for device in devices:
+            if device.ip or not device.hostname:
+                continue
+            resolved = self._dns_resolve(device.hostname)
+            if not resolved:
+                continue
+            try:
+                addr = ipaddress.ip_address(resolved)
+            except ValueError:
+                continue
+            if any(addr in subnet for subnet in subnets):
+                device.ip = resolved
+
+    @staticmethod
+    def _dns_resolve(hostname: str, timeout: float = 2.0) -> str:
+        try:
+            old = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(timeout)
+            try:
+                return socket.gethostbyname(hostname)
+            finally:
+                socket.setdefaulttimeout(old)
+        except Exception:
+            return ''

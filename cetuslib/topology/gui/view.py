@@ -8,10 +8,13 @@ populates the scene from a :class:`TopologyGraph`.
 from __future__ import annotations
 
 import math
+import os
+import sys
+from typing import Optional
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QPolygonF,
+    QColor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPen, QPolygonF,
 )
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
@@ -46,11 +49,58 @@ ROLE_COLOR = {
     DeviceRole.ROUTER: QColor(210, 153, 34),
     DeviceRole.SWITCH: QColor(88, 166, 255),
     DeviceRole.ACCESS: QColor(121, 192, 255),
+    DeviceRole.FIREWALL: QColor(230, 126, 34),
     DeviceRole.SERVER: QColor(163, 113, 247),
     DeviceRole.AP: QColor(63, 185, 80),
+    DeviceRole.CAMERA: QColor(210, 153, 34),
+    DeviceRole.CLOUD: QColor(88, 166, 255),
     DeviceRole.HOST: QColor(201, 209, 217),
     DeviceRole.UNKNOWN: QColor(139, 148, 158),
 }
+
+# Realistic device icons (assets/icons/network-icons) keyed by role.
+ROLE_ICON = {
+    DeviceRole.CORE: 'switch_l3.svg',
+    DeviceRole.ROUTER: 'router.svg',
+    DeviceRole.SWITCH: 'switch_l2.svg',
+    DeviceRole.ACCESS: 'switch_l2.svg',
+    DeviceRole.FIREWALL: 'firewall.svg',
+    DeviceRole.SERVER: 'server.svg',
+    DeviceRole.AP: 'router.svg',
+    DeviceRole.CAMERA: 'camera.svg',
+    DeviceRole.CLOUD: 'internet.svg',
+    DeviceRole.HOST: 'pc.svg',
+    DeviceRole.UNKNOWN: 'router.svg',
+}
+
+_NETWORK_ICON_DIRS = [
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))), 'assets', 'icons',
+        'network-icons'),
+    os.path.join(getattr(sys, '_MEIPASS', ''), 'assets', 'icons', 'network-icons'),
+    '/app/share/io.github.benjamimgois.cetus/icons/network-icons',
+    '/usr/share/cetus/icons/network-icons',
+]
+
+_icon_cache: dict[str, Optional[QIcon]] = {}
+
+
+def device_icon(device: Device) -> Optional[QIcon]:
+    """Return the network icon for a device's role (None if unavailable)."""
+    name = ROLE_ICON.get(device.role)
+    if not name:
+        return None
+    if name in _icon_cache:
+        return _icon_cache[name]
+    for base in _NETWORK_ICON_DIRS:
+        path = os.path.join(base, name)
+        if os.path.exists(path):
+            icon = QIcon(path)
+            if not icon.isNull():
+                _icon_cache[name] = icon
+                return icon
+    _icon_cache[name] = None
+    return None
 
 # Hop-level colours: level 1 (seed network) = green, level 2 (LLDP neighbours)
 # = gray, deeper levels = a dimmer slate so the hierarchy stays readable.
@@ -194,7 +244,15 @@ class NodeItem(QGraphicsObject):
         painter.setPen(QPen(QColor(30, 35, 42), 1))
         painter.setBrush(QColor(30, 35, 42))
         painter.drawEllipse(icon_center, 22, 22)
-        draw_device_icon(painter, icon_center, self.device.role, role_color)
+        icon = device_icon(self.device)
+        if icon is not None:
+            r = 19.0
+            icon.paint(painter,
+                       QRect(int(icon_center.x() - r), int(icon_center.y() - r),
+                             int(r * 2), int(r * 2)),
+                       Qt.AlignmentFlag.AlignCenter)
+        else:
+            draw_device_icon(painter, icon_center, self.device.role, role_color)
 
         x0 = rect.left() + 62
         fm = QFontMetricsF(QFont('Sans', 10, QFont.Weight.Bold))

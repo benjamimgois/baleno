@@ -18,8 +18,11 @@ class DeviceRole(str, Enum):
     SWITCH = 'switch'        # L2/L3 switch
     CORE = 'core'            # core/distribution switch
     ACCESS = 'access'        # access switch
+    FIREWALL = 'firewall'
     SERVER = 'server'
     AP = 'ap'                # wireless access point
+    CAMERA = 'camera'        # surveillance / IP camera / NVR
+    CLOUD = 'cloud'          # WAN / internet / cloud appliance
     HOST = 'host'            # generic endpoint (PC, printer, IP phone...)
     UNKNOWN = 'unknown'
 
