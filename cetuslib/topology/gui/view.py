@@ -12,10 +12,11 @@ import os
 import sys
 from typing import Optional
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPen, QPolygonF,
+    QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QPolygonF,
 )
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
     QGraphicsView,
@@ -43,6 +44,7 @@ DOWN = QColor(248, 81, 73)       # #F85149
 UNKNOWN = QColor(139, 148, 158)
 ACCENT = QColor(88, 166, 255)    # #58A6FF
 EDGE = QColor(139, 148, 158)
+GRID_LINE = QColor(30, 36, 44)   # very faint grid, barely lighter than BG
 
 ROLE_COLOR = {
     DeviceRole.CORE: QColor(88, 166, 255),
@@ -66,11 +68,11 @@ ROLE_ICON = {
     DeviceRole.ACCESS: 'switch_l2.svg',
     DeviceRole.FIREWALL: 'firewall.svg',
     DeviceRole.SERVER: 'server.svg',
-    DeviceRole.AP: 'router.svg',
+    DeviceRole.AP: 'wifi.svg',
     DeviceRole.CAMERA: 'camera.svg',
     DeviceRole.CLOUD: 'internet.svg',
     DeviceRole.HOST: 'pc.svg',
-    DeviceRole.UNKNOWN: 'router.svg',
+    DeviceRole.UNKNOWN: 'unknown.svg',
 }
 
 _NETWORK_ICON_DIRS = [
@@ -82,24 +84,29 @@ _NETWORK_ICON_DIRS = [
     '/usr/share/cetus/icons/network-icons',
 ]
 
-_icon_cache: dict[str, Optional[QIcon]] = {}
+_renderer_cache: dict[str, Optional[QSvgRenderer]] = {}
 
 
-def device_icon(device: Device) -> Optional[QIcon]:
-    """Return the network icon for a device's role (None if unavailable)."""
+def device_renderer(device: Device) -> Optional[QSvgRenderer]:
+    """Return a vector SVG renderer for a device's role (None if unavailable).
+
+    QSvgRenderer keeps the artwork vector: it is rasterised at the exact paint
+    size each frame, so the icon stays crisp at any zoom level (unlike a QIcon,
+    which caches a fixed-resolution pixmap and pixelates when scaled).
+    """
     name = ROLE_ICON.get(device.role)
     if not name:
         return None
-    if name in _icon_cache:
-        return _icon_cache[name]
+    if name in _renderer_cache:
+        return _renderer_cache[name]
     for base in _NETWORK_ICON_DIRS:
         path = os.path.join(base, name)
         if os.path.exists(path):
-            icon = QIcon(path)
-            if not icon.isNull():
-                _icon_cache[name] = icon
-                return icon
-    _icon_cache[name] = None
+            renderer = QSvgRenderer(path)
+            if renderer.isValid():
+                _renderer_cache[name] = renderer
+                return renderer
+    _renderer_cache[name] = None
     return None
 
 # Hop-level colours: level 1 (seed network) = green, level 2 (LLDP neighbours)
@@ -244,13 +251,11 @@ class NodeItem(QGraphicsObject):
         painter.setPen(QPen(QColor(30, 35, 42), 1))
         painter.setBrush(QColor(30, 35, 42))
         painter.drawEllipse(icon_center, 22, 22)
-        icon = device_icon(self.device)
-        if icon is not None:
+        renderer = device_renderer(self.device)
+        if renderer is not None:
             r = 19.0
-            icon.paint(painter,
-                       QRect(int(icon_center.x() - r), int(icon_center.y() - r),
-                             int(r * 2), int(r * 2)),
-                       Qt.AlignmentFlag.AlignCenter)
+            renderer.render(painter, QRectF(icon_center.x() - r, icon_center.y() - r,
+                                            r * 2, r * 2))
         else:
             draw_device_icon(painter, icon_center, self.device.role, role_color)
 
@@ -451,6 +456,23 @@ class TopologyScene(QGraphicsScene):
         self.visible_levels: Optional[set] = None
         self.setBackgroundBrush(BG)
         self.setSceneRect(-20000, -20000, 40000, 40000)
+
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+        """Fill the dark background and draw a faint grid to aid alignment."""
+        super().drawBackground(painter, rect)
+        grid = 40.0
+        painter.setPen(QPen(GRID_LINE, 1))
+        lines: list[QLineF] = []
+        x = math.floor(rect.left() / grid) * grid
+        while x < rect.right():
+            lines.append(QLineF(x, rect.top(), x, rect.bottom()))
+            x += grid
+        y = math.floor(rect.top() / grid) * grid
+        while y < rect.bottom():
+            lines.append(QLineF(rect.left(), y, rect.right(), y))
+            y += grid
+        if lines:
+            painter.drawLines(lines)
 
     def set_graph(self, graph: TopologyGraph, layout_mode: str = 'hierarchical',
                   positions: dict[str, tuple[float, float]] | None = None,
