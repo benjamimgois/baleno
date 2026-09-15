@@ -226,7 +226,12 @@ class NodeItem(QGraphicsObject):
 
 
 class EdgeItem(QGraphicsPathItem):
-    """A link between two nodes, labelled with both endpoint ports."""
+    """A link between two nodes, labelled with both endpoint ports.
+
+    Styling follows the endpoint levels: links between two level-1 devices are
+    green and thicker (backbone), while any link touching a level-2+ device is
+    gray and thinner.
+    """
 
     def __init__(self, link: PortLink, source: NodeItem, target: NodeItem, offset: int = 0):
         super().__init__()
@@ -235,7 +240,10 @@ class EdgeItem(QGraphicsPathItem):
         self.target = target
         self.offset = offset
         self.setZValue(0)
-        self.setPen(QPen(EDGE if not link.lag else ACCENT, 1.5))
+        if source.device.layer <= 1 and target.device.layer <= 1:
+            self.setPen(QPen(level_color(1), 2.5))
+        else:
+            self.setPen(QPen(EDGE, 1.0))
         source.add_edge(self)
         target.add_edge(self)
         self.update_path()
@@ -283,14 +291,17 @@ class GroupNodeItem(QGraphicsObject):
     """
 
     RADIUS = 22.0
+    MIN_GAP = 80.0          # minimum vertical gap below the parent level-1 node
     clicked = pyqtSignal(object)   # emits the GroupNodeItem
     moved = pyqtSignal(object)     # emits the GroupNodeItem
 
-    def __init__(self, parent_id: str, member_ids: list[str], graph: TopologyGraph):
+    def __init__(self, parent_id: str, member_ids: list[str], graph: TopologyGraph,
+                 parent_node: Optional[NodeItem] = None):
         super().__init__()
         self.parent_id = parent_id
         self.member_ids = list(member_ids)
         self.graph = graph
+        self.parent_node = parent_node
         self.links: list[GroupLinkItem] = []
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
@@ -307,6 +318,13 @@ class GroupNodeItem(QGraphicsObject):
         return f'{len(self.member_ids)} devices (click to list, drag to move)'
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange \
+                and self.parent_node is not None:
+            p = QPointF(value)
+            min_y = self.parent_node.pos().y() + self.MIN_GAP
+            if p.y() < min_y:
+                p.setY(min_y)
+                return p
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for link in self.links:
                 link.update_path()
@@ -347,7 +365,7 @@ class GroupLinkItem(QGraphicsPathItem):
         self.source = source
         self.target = target
         self.setZValue(0)
-        self.setPen(QPen(EDGE, 1.5, Qt.PenStyle.DashLine))
+        self.setPen(QPen(EDGE, 1.0, Qt.PenStyle.DashLine))
         source.moved.connect(self.update_path)
         target.links.append(self)
         self.update_path()
@@ -403,7 +421,8 @@ class TopologyScene(QGraphicsScene):
 
         # group nodes (one per over-populated level-1 parent)
         for parent_id, member_ids in self.clusters.items():
-            gnode = GroupNodeItem(parent_id, member_ids, graph)
+            gnode = GroupNodeItem(parent_id, member_ids, graph,
+                                  parent_node=self.node_items.get(parent_id))
             gnode.clicked.connect(self.group_clicked)
             self.addItem(gnode)
             self.group_items[parent_id] = gnode
