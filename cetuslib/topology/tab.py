@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from PyQt6.QtCore import QMimeData, QPoint, QRectF, Qt
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from cetuslib.topology.collector import SnmpCredentials
 from cetuslib.topology.worker import TopologyDiscoveryWorker
+from cetuslib.topology.monitor import TrafficMonitor
 from cetuslib.topology.models import Device, DeviceRole
 from cetuslib.topology.gui.view import (
     TopologyView, DEVICE_MIME, role_renderer,
@@ -178,7 +179,9 @@ class TopologyTab(QWidget):
         super().__init__(parent)
         self._config = config_manager
         self._worker = None
+        self._monitor = None
         self._graph = None
+        self._live_devices: dict[str, Device] = {}
         self.setObjectName('topologyRoot')
         self.setStyleSheet(_TAB_STYLE)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -399,9 +402,12 @@ class TopologyTab(QWidget):
             config=self._config,
         )
         self._worker.progress.connect(self._on_progress)
+        self._worker.device_found.connect(self._on_device_found)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._worker.deleteLater)
+        self.view.clear_scene()
+        self._live_devices: dict[str, Device] = {}
         self.discover_btn.setEnabled(False)
         self.progress.setValue(0)
         self.status_label.setText('Scanning…')
@@ -411,6 +417,14 @@ class TopologyTab(QWidget):
         self.progress.setValue(percent)
         self.status_label.setText(message)
 
+    def _on_device_found(self, device) -> None:
+        """Show a device on the map as soon as it is detected (progressive)."""
+        idx = len(self._live_devices)
+        x = (idx % 10) * 190 - 855
+        y = (idx // 10) * 140 - 300
+        self.view.add_device_node(device, QPointF(x, y))
+        self._live_devices[device.id] = device
+
     def _on_finished(self, graph) -> None:
         self._graph = graph
         self.view.load(graph, self.layout_combo.currentData())
@@ -419,6 +433,7 @@ class TopologyTab(QWidget):
             f'{len(graph.devices)} nodes · {len(graph.links)} links · '
             f'{len(graph.orphans)} orphans')
         self.discover_btn.setEnabled(True)
+        self._start_monitor(graph)
 
     def _on_failed(self, message: str) -> None:
         self.status_label.setText(f'Error: {message}')
@@ -538,3 +553,26 @@ class TopologyTab(QWidget):
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
             self._worker.wait(15000)
+        self._stop_monitor()
+
+    # ── live performance monitor ─────────────────────────────────────────
+
+    def _start_monitor(self, graph) -> None:
+        self._stop_monitor()
+        devices = [d for d in graph.devices.values()
+                   if d.ip and d.status == 'up' and d.interfaces]
+        if not devices:
+            return
+        self._monitor = TrafficMonitor(
+            devices, self._credentials(),
+            communities=self._community_list(),
+            config=self._config,
+        )
+        self._monitor.updated.connect(self.view.update_traffic)
+        self._monitor.start()
+
+    def _stop_monitor(self) -> None:
+        if self._monitor is not None:
+            self._monitor.stop()
+            self._monitor.wait(3000)
+            self._monitor = None

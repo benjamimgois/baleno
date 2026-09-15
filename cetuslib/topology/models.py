@@ -38,6 +38,11 @@ class Interface:
     mac: str = ''
     oper_status: str = 'up'          # 'up' | 'down' | 'unknown'
     speed: str = ''
+    speed_mbps: float = 0.0          # link capacity in Mbps (ifHighSpeed)
+    in_octets: int = 0               # cumulative received octets (64-bit if HC)
+    out_octets: int = 0              # cumulative transmitted octets
+    in_rate_bps: float = 0.0         # live rate (computed by the monitor poller)
+    out_rate_bps: float = 0.0
 
 
 @dataclass
@@ -76,6 +81,10 @@ class Device:
     latency_ms: float = 0.0
     uptime: str = ''
     layer: int = 0                   # 1-based hop level from the seed networks (0 = unassigned)
+    cpu_usage: float = -1.0          # percent, -1 = unknown
+    memory_usage: float = -1.0       # percent used, -1 = unknown
+    in_rate_bps: float = 0.0         # total received rate across interfaces
+    out_rate_bps: float = 0.0        # total transmitted rate across interfaces
     interfaces: dict[int, Interface] = field(default_factory=dict)
     lldp_neighbors: list[LldpNeighbor] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -97,6 +106,7 @@ class PortLink:
     source_port: str
     target_id: str
     target_port: str
+    source_ifindex: int = 0          # ifIndex of the source-side interface (0 = unknown)
     lag: bool = False                # bundled into a LAG (multiple parallel links)
     weight: int = 1
     status: str = 'up'

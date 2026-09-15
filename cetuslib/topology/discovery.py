@@ -66,7 +66,7 @@ class PingScanner:
     (falling back to elapsed/count when the output cannot be parsed).
     """
 
-    def __init__(self, concurrency: int = 100, timeout: float = 2.0,
+    def __init__(self, concurrency: int = 100, timeout: float = 1.0,
                  count: int = 2, retries: int = 1):
         self.concurrency = concurrency
         self.timeout = timeout

@@ -22,8 +22,10 @@ from PyQt6.QtWidgets import (
     QGraphicsView,
 )
 
-from cetuslib.topology.models import Device, DeviceRole, PortLink, TopologyGraph
-from cetuslib.topology.engine import TopologyEngine
+from cetuslib.topology.models import (
+    Device, DeviceRole, Interface, PortLink, TopologyGraph,
+)
+from cetuslib.topology.engine import TopologyEngine, normalize_port
 from cetuslib.topology.persistence import (
     apply_layout, load_layout, load_group_layout, save_layout, default_layout_path,
 )
@@ -155,6 +157,17 @@ def _status_color(device: Device) -> QColor:
     return UNKNOWN
 
 
+def _fmt_rate(bps: float) -> str:
+    """Human-readable throughput: '0 Mbps', '123.4 Mbps', '1.25 Gbps'."""
+    if bps <= 0:
+        return '0 Mbps'
+    if bps >= 1e9:
+        return f'{bps / 1e9:.2f} Gbps'
+    if bps >= 1e6:
+        return f'{bps / 1e6:.1f} Mbps'
+    return f'{bps / 1e3:.0f} kbps'
+
+
 def draw_device_icon(painter: QPainter, center: QPointF, role: DeviceRole, color: QColor) -> None:
     """Draw a simple vector glyph for a device role inside its icon circle."""
     painter.save()
@@ -203,7 +216,7 @@ class NodeItem(QGraphicsObject):
     """A device node. Movable, selectable; emits signals on move / double-click."""
 
     WIDTH = 170.0
-    HEIGHT = 96.0
+    HEIGHT = 112.0
     moved = pyqtSignal(object)
     double_clicked = pyqtSignal(object)
 
@@ -223,8 +236,15 @@ class NodeItem(QGraphicsObject):
 
     def _tooltip(self) -> str:
         d = self.device
-        return (f"{d.label}\n{d.ip}\n{d.role.value} · {d.vendor} {d.model}\n"
-                f"status: {d.status} · {d.latency_ms} ms")
+        cpu = f'{d.cpu_usage:.0f}%' if d.cpu_usage >= 0 else '—'
+        mem = f'{d.memory_usage:.0f}%' if d.memory_usage >= 0 else '—'
+        return (f'{d.label}\n{d.ip}\n{d.role.value} · {d.vendor} {d.model}\n'
+                f'status: {d.status} · {d.latency_ms} ms\n'
+                f'CPU {cpu} · Mem {mem}\n'
+                f'Traffic ↓ {_fmt_rate(d.in_rate_bps)} · ↑ {_fmt_rate(d.out_rate_bps)}')
+
+    def refresh_tooltip(self) -> None:
+        self.setToolTip(self._tooltip())
 
     def add_edge(self, edge: EdgeItem) -> None:
         self.edges.append(edge)
@@ -302,6 +322,14 @@ class NodeItem(QGraphicsObject):
         painter.setPen(role_color)
         painter.drawText(QPointF(x0, rect.top() + 58), self.device.role.value.upper())
 
+        model = (self.device.model or self.device.vendor or '').strip()
+        if model:
+            if len(model) > 24:
+                model = model[:23] + '…'
+            painter.setFont(QFont('Sans', 7))
+            painter.setPen(TEXT_DIM)
+            painter.drawText(QPointF(x0, rect.top() + 74), model)
+
         # status dot + latency badge (top-right)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(status)
@@ -337,6 +365,25 @@ class EdgeItem(QGraphicsPathItem):
         target.add_edge(self)
         self.update_path()
 
+    def source_interface(self) -> Optional[Interface]:
+        """Resolve the source-side interface for this link (by ifIndex/name)."""
+        device = self.source.device
+        if self.link.source_ifindex:
+            iface = device.interfaces.get(self.link.source_ifindex)
+            if iface is not None:
+                return iface
+        key = normalize_port(self.link.source_port)
+        for iface in device.interfaces.values():
+            if normalize_port(iface.name) == key:
+                return iface
+        return None
+
+    def traffic_label(self) -> str:
+        iface = self.source_interface()
+        if iface is None or (iface.in_rate_bps <= 0 and iface.out_rate_bps <= 0):
+            return ''
+        return f'{_fmt_rate(iface.in_rate_bps)} ↓ · ↑ {_fmt_rate(iface.out_rate_bps)}'
+
     def update_path(self) -> None:
         s = self.source.pos()
         t = self.target.pos()
@@ -359,6 +406,7 @@ class EdgeItem(QGraphicsPathItem):
         t = self.target.pos()
         mid = (s + t) / 2
         label = f"{self.link.source_port} ⟷ {self.link.target_port}"
+        traffic = self.traffic_label()
         painter.setPen(TEXT_DIM)
         painter.setFont(QFont('Monospace', 7))
         bg = QColor(BG)
@@ -366,9 +414,18 @@ class EdgeItem(QGraphicsPathItem):
         tw = fm.horizontalAdvance(label)
         painter.setBrush(bg)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(QRectF(mid.x() - tw / 2 - 4, mid.y() - 8, tw + 8, 14), 3, 3)
-        painter.setPen(TEXT_DIM)
-        painter.drawText(QPointF(mid.x() - tw / 2, mid.y() + 3), label)
+        if traffic:
+            t_fm = QFontMetricsF(QFont('Monospace', 7))
+            box_w = max(tw, t_fm.horizontalAdvance(traffic)) + 8
+            painter.drawRoundedRect(QRectF(mid.x() - box_w / 2, mid.y() - 16, box_w, 26), 3, 3)
+            painter.setPen(TEXT_DIM)
+            painter.drawText(QPointF(mid.x() - tw / 2, mid.y() - 2), label)
+            painter.setPen(ACCENT)
+            painter.drawText(QPointF(mid.x() - t_fm.horizontalAdvance(traffic) / 2, mid.y() + 10), traffic)
+        else:
+            painter.drawRoundedRect(QRectF(mid.x() - tw / 2 - 4, mid.y() - 8, tw + 8, 14), 3, 3)
+            painter.setPen(TEXT_DIM)
+            painter.drawText(QPointF(mid.x() - tw / 2, mid.y() + 3), label)
 
 
 class GroupNodeItem(QGraphicsObject):
@@ -613,16 +670,27 @@ class TopologyScene(QGraphicsScene):
         for glink in self.group_links:
             glink.setVisible(glink.source.device.layer in levels and 2 in levels)
 
-    def add_manual_device(self, role: DeviceRole, pos: QPointF) -> Device:
-        """Add a manually-placed device node (from the palette) at ``pos``."""
-        self._manual_counter += 1
-        device_id = f'manual-{self._manual_counter}'
-        device = Device(id=device_id, role=role, status='unknown', layer=1)
+    def _add_node(self, device: Device, pos: QPointF) -> NodeItem:
         node = NodeItem(device)
         node.setPos(pos)
         node.double_clicked.connect(self.node_double_clicked)
         self.addItem(node)
-        self.node_items[device_id] = node
+        self.node_items[device.id] = node
+        return node
+
+    def add_device_node(self, device: Device, pos: QPointF) -> NodeItem:
+        """Add a node for an existing (discovered) device; no-op if present."""
+        existing = self.node_items.get(device.id)
+        if existing is not None:
+            return existing
+        return self._add_node(device, pos)
+
+    def add_manual_device(self, role: DeviceRole, pos: QPointF) -> Device:
+        """Add a manually-placed device node (from the palette) at ``pos``."""
+        self._manual_counter += 1
+        device = Device(id=f'manual-{self._manual_counter}', role=role,
+                        status='unknown', layer=1)
+        self._add_node(device, pos)
         return device
 
 
@@ -776,6 +844,21 @@ class TopologyView(QGraphicsView):
         self._scene.node_items[device.id].moved.connect(self._schedule_save)
         return device
 
+    def add_device_node(self, device: Device, pos: QPointF) -> None:
+        """Add a discovered device node (progressive display); wires its save."""
+        node = self._scene.add_device_node(device, pos)
+        node.moved.connect(self._schedule_save)
+
+    def clear_scene(self) -> None:
+        """Remove all items and reset the scene (used before a new discovery)."""
+        self._scene.clear()
+        self._scene.node_items = {}
+        self._scene.edge_items = []
+        self._scene.group_items = {}
+        self._scene.group_links = []
+        self._scene.graph = None
+        self._scene.clusters = {}
+
     # ── drag-and-drop (device palette → canvas) ──────────────────────────
 
     def dragEnterEvent(self, event) -> None:
@@ -825,6 +908,33 @@ class TopologyView(QGraphicsView):
         scene.render(painter, QRectF(image.rect()), source)
         painter.end()
         return image.save(path, 'PNG')
+
+    def update_traffic(self, data: dict) -> None:
+        """Apply live CPU/memory/traffic rates and refresh tooltips + edges."""
+        for device_id, perf in data.items():
+            node = self._scene.node_items.get(device_id)
+            device = node.device if node is not None else None
+            if device is None and self._scene.graph is not None:
+                device = self._scene.graph.devices.get(device_id)
+            if device is None:
+                continue
+            cpu = perf.get('cpu')
+            mem = perf.get('memory')
+            if cpu is not None:
+                device.cpu_usage = round(float(cpu), 1)
+            if mem is not None:
+                device.memory_usage = float(mem)
+            device.in_rate_bps = perf.get('in_bps', 0.0)
+            device.out_rate_bps = perf.get('out_bps', 0.0)
+            for idx, (in_bps, out_bps) in perf.get('if_rates', {}).items():
+                iface = device.interfaces.get(idx)
+                if iface is not None:
+                    iface.in_rate_bps = in_bps
+                    iface.out_rate_bps = out_bps
+            if node is not None:
+                node.refresh_tooltip()
+        for edge in self._scene.edge_items:
+            edge.update()
 
 
 def load_graph(graph: TopologyGraph, layout_mode: str = 'hierarchical') -> TopologyView:

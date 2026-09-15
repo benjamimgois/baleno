@@ -82,6 +82,7 @@ class TopologyEngine:
                     source_port=n.local_port_name or str(n.local_port_num),
                     target_id=target,
                     target_port=n.remote_port_id or n.remote_port_desc or '',
+                    source_ifindex=n.local_port_num,
                 )
                 groups[frozenset((d.id, target))].append(link)
 

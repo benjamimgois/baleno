@@ -14,6 +14,7 @@ thread never blocks.
 
 from __future__ import annotations
 
+import concurrent.futures
 import ipaddress
 import socket
 from collections import deque
@@ -30,6 +31,9 @@ from cetuslib.topology.engine import TopologyEngine, normalize_port
 from cetuslib.topology.models import Device, DeviceRole, TopologyGraph
 
 __all__ = ['TopologyDiscoveryWorker']
+
+# Concurrent SNMP collections (the dominant cost is per-device SNMP walks).
+MAX_CONCURRENT = 8
 
 
 class TopologyDiscoveryWorker(QThread):
@@ -72,46 +76,50 @@ class TopologyDiscoveryWorker(QThread):
             seed_total = len(worklist)
             processed = 0
 
-            while worklist:
-                if self._stop:
-                    return
-                if len(devices) >= self.max_devices:
-                    break
-                ip = worklist.popleft()
-                rtt = reachable.get(ip, 0.0)
-                processed += 1
-                frac = processed / max(seed_total, len(worklist) + processed, 1)
-                self.progress.emit(5 + min(70, int(70 * frac)), f"LLDP {ip}…")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+                while worklist:
+                    if self._stop:
+                        return
+                    if len(devices) >= self.max_devices:
+                        break
+                    wave = []
+                    while worklist and len(wave) < MAX_CONCURRENT:
+                        wave.append(worklist.popleft())
+                    futures = {pool.submit(self._collect_ip, ip): ip for ip in wave}
+                    for fut in concurrent.futures.as_completed(futures):
+                        if self._stop:
+                            return
+                        ip = futures[fut]
+                        device, community = fut.result()
+                        rtt = reachable.get(ip, 0.0)
+                        processed += 1
+                        frac = processed / max(seed_total, len(worklist) + processed, 1)
+                        self.progress.emit(5 + min(70, int(70 * frac)), f"LLDP {ip}…")
 
-                try:
-                    device = self._collect(ip)
-                except SnmpUnavailableError:
-                    device = None
-                except Exception:
-                    device = None
+                        if device is None:
+                            if ip in reachable:
+                                orphan = Device(id=ip, ip=ip, status='up',
+                                                latency_ms=rtt)
+                                devices.append(orphan)
+                                self.device_found.emit(orphan)
+                            continue
 
-                if device is None:
-                    if ip in reachable:
-                        orphan = Device(id=ip, ip=ip, status='up',
-                                        latency_ms=rtt)
-                        devices.append(orphan)
-                        self.device_found.emit(orphan)
-                    continue
+                        if community and self.config is not None:
+                            self.config.set_snmp_ip_community(ip, community)
+                        device.latency_ms = rtt
+                        if not device.ip:
+                            device.ip = ip
+                        device.status = 'up'
+                        devices.append(device)
+                        self.device_found.emit(device)
 
-                device.latency_ms = rtt
-                if not device.ip:
-                    device.ip = ip
-                device.status = 'up'
-                devices.append(device)
-                self.device_found.emit(device)
-
-                # LLDP-driven expansion: probe neighbour management addresses
-                # even when they never answered the ICMP sweep.
-                for n in device.lldp_neighbors:
-                    mgmt = n.remote_mgmt_addr
-                    if mgmt and mgmt not in queued:
-                        queued.add(mgmt)
-                        worklist.append(mgmt)
+                        # LLDP-driven expansion: probe neighbour management
+                        # addresses even when they never answered ICMP.
+                        for n in device.lldp_neighbors:
+                            mgmt = n.remote_mgmt_addr
+                            if mgmt and mgmt not in queued:
+                                queued.add(mgmt)
+                                worklist.append(mgmt)
 
             self._add_placeholders(devices)
             self._resolve_missing_ips(devices)
@@ -126,31 +134,26 @@ class TopologyDiscoveryWorker(QThread):
 
     # ── SNMP collection with community fallback ──────────────────────────
 
-    def _collect(self, ip: str) -> Device:
-        """Collect one device, trying each known community until one works.
+    def _collect_ip(self, ip: str) -> tuple:
+        """Collect one device in a pool thread; returns ``(device, community)``.
 
-        For v1/v2c the candidate list is: the community that last worked for
-        this IP (from config), then the communities inherited from the SNMP
-        tab plus the one typed in the topology tab.  The first community that
-        yields a valid LLDP walk wins and is remembered per-IP.
+        ``community`` is the one that worked (or None).  This is deliberately
+        free of config writes so it can run concurrently; the caller records the
+        working community on the worker thread.
         """
         creds = self.credentials
         if creds.version in ('1', '2c') and self.communities:
-            ordered = self._ordered_communities(ip)
-            last_exc: Optional[Exception] = None
-            for community in ordered:
+            for community in self._ordered_communities(ip):
                 try:
                     device = LldpCollector(replace(creds, community=community)).collect(ip)
-                except (SnmpUnavailableError, Exception) as exc:
-                    last_exc = exc
+                    return device, community
+                except Exception:
                     continue
-                if self.config is not None:
-                    self.config.set_snmp_ip_community(ip, community)
-                return device
-            if last_exc is not None:
-                raise last_exc
-            raise SnmpUnavailableError(ip)
-        return LldpCollector(creds).collect(ip)
+            return None, None
+        try:
+            return LldpCollector(creds).collect(ip), None
+        except Exception:
+            return None, None
 
     def _ordered_communities(self, ip: str) -> list[str]:
         ordered: list[str] = []

@@ -56,6 +56,18 @@ OID_IF_DESCR = '1.3.6.1.2.1.2.2.1.2'
 OID_IF_ALIAS = '1.3.6.1.2.1.31.1.1.1.18'
 OID_IF_NAME = '1.3.6.1.2.1.31.1.1.1.1'
 OID_IF_OPER_STATUS = '1.3.6.1.2.1.2.2.1.8'
+OID_IF_IN_OCTETS = '1.3.6.1.2.1.2.2.1.10'
+OID_IF_OUT_OCTETS = '1.3.6.1.2.1.2.2.1.16'
+OID_IF_SPEED = '1.3.6.1.2.1.2.2.1.5'
+OID_IF_HC_IN_OCTETS = '1.3.6.1.2.1.31.1.1.1.6'
+OID_IF_HC_OUT_OCTETS = '1.3.6.1.2.1.31.1.1.1.10'
+OID_IF_HIGH_SPEED = '1.3.6.1.2.1.31.1.1.1.15'
+
+# Performance (best-effort, vendor-dependent)
+OID_HR_PROCESSOR_LOAD = '1.3.6.1.2.1.25.3.3.1.2'          # HOST-RESOURCES-MIB
+OID_CISCO_CPU_5MIN_REV = '1.3.6.1.4.1.9.9.109.1.1.1.1.8'  # CISCO-PROCESS-MIB
+OID_CISCO_MEM_POOL_USED = '1.3.6.1.4.1.9.9.48.1.1.1.5'    # CISCO-MEMORY-POOL-MIB
+OID_CISCO_MEM_POOL_FREE = '1.3.6.1.4.1.9.9.48.1.1.1.6'
 
 # Future CDP extension point (CISCO-CDP-MIB).
 CDP_MIB = '1.3.6.1.4.1.9.9.23'
@@ -193,6 +205,29 @@ class LldpCollector:
         import asyncio
         return asyncio.run(self.collect_async(host))
 
+    def poll(self, host: str) -> dict:
+        """Synchronous perf poll: CPU, memory and per-interface octet counters."""
+        import asyncio
+        return asyncio.run(self.poll_async(host))
+
+    async def poll_async(self, host: str) -> dict:
+        from pysnmp.hlapi.v3arch.asyncio import (
+            SnmpEngine, UdpTransportTarget,
+        )
+        engine = SnmpEngine()
+        result: dict = {'cpu': None, 'memory': None, 'counters': {}}
+        try:
+            target = await UdpTransportTarget.create(
+                (host, self.port), timeout=self.timeout, retries=self.retries)
+            auth = self._auth_data()
+            result['cpu'], result['memory'] = await self._read_cpu_mem(engine, auth, target)
+            result['counters'] = await self._read_counters(engine, auth, target)
+        except Exception:
+            pass
+        finally:
+            engine.close_dispatcher()
+        return result
+
     async def collect_async(self, host: str) -> Device:
         from pysnmp.hlapi.v3arch.asyncio import (
             SnmpEngine, UdpTransportTarget, ContextData,
@@ -230,6 +265,9 @@ class LldpCollector:
             # LLDP neighbors
             device.lldp_neighbors = await self._collect_neighbors(
                 engine, auth, target)
+
+            # CPU / memory (best-effort)
+            await self._fill_perf(engine, auth, target, device)
 
             device.status = 'up'
         finally:
@@ -355,6 +393,91 @@ class LldpCollector:
             if idx in device.interfaces:
                 device.interfaces[idx].oper_status = (
                     'up' if val == '1' else 'down' if val == '2' else 'unknown')
+
+        await self._fill_if_stats(engine, auth, target, device)
+
+    async def _fill_if_stats(self, engine, auth, target, device: Device) -> None:
+        """Populate interface counters (64-bit HC, 32-bit fallback) and speed."""
+        counters = await self._read_counters(engine, auth, target)
+        for idx, (in_oct, out_oct) in counters.items():
+            iface = device.interfaces.get(idx)
+            if iface is not None:
+                iface.in_octets = in_oct
+                iface.out_octets = out_oct
+
+        high_speed = await self._walk(engine, auth, target, OID_IF_HIGH_SPEED)
+        for oid, val in high_speed:
+            try:
+                idx = int(_oid_suffix(oid, OID_IF_HIGH_SPEED)[-1])
+                mbps = float(val)
+            except (IndexError, ValueError):
+                continue
+            if idx in device.interfaces:
+                device.interfaces[idx].speed_mbps = mbps
+
+    async def _read_counters(self, engine, auth, target) -> dict[int, list[int]]:
+        """Return ``{ifIndex: [in_octets, out_octets]}`` (64-bit HC preferred)."""
+        hc_in = await self._walk(engine, auth, target, OID_IF_HC_IN_OCTETS)
+        base_in = OID_IF_HC_IN_OCTETS
+        if not hc_in:
+            hc_in = await self._walk(engine, auth, target, OID_IF_IN_OCTETS)
+            base_in = OID_IF_IN_OCTETS
+        hc_out = await self._walk(engine, auth, target, OID_IF_HC_OUT_OCTETS)
+        base_out = OID_IF_HC_OUT_OCTETS
+        if not hc_out:
+            hc_out = await self._walk(engine, auth, target, OID_IF_OUT_OCTETS)
+            base_out = OID_IF_OUT_OCTETS
+
+        counters: dict[int, list[int]] = {}
+        for oid, val in hc_in:
+            try:
+                idx = int(_oid_suffix(oid, base_in)[-1])
+                counters.setdefault(idx, [0, 0])[0] = int(val)
+            except (IndexError, ValueError):
+                continue
+        for oid, val in hc_out:
+            try:
+                idx = int(_oid_suffix(oid, base_out)[-1])
+                counters.setdefault(idx, [0, 0])[1] = int(val)
+            except (IndexError, ValueError):
+                continue
+        return counters
+
+    async def _read_cpu_mem(self, engine, auth, target) -> tuple:
+        """Return ``(cpu_percent, memory_percent)``; None when unavailable."""
+        cpu = None
+        cpu_rows = await self._walk(engine, auth, target, OID_CISCO_CPU_5MIN_REV)
+        if not cpu_rows:
+            cpu_rows = await self._walk(engine, auth, target, OID_HR_PROCESSOR_LOAD)
+        if cpu_rows:
+            vals: list[float] = []
+            for _, v in cpu_rows:
+                try:
+                    vals.append(float(v))
+                except ValueError:
+                    continue
+            if vals:
+                cpu = sum(vals) / len(vals)
+
+        mem = None
+        used_rows = await self._walk(engine, auth, target, OID_CISCO_MEM_POOL_USED)
+        free_rows = await self._walk(engine, auth, target, OID_CISCO_MEM_POOL_FREE)
+        if used_rows and free_rows:
+            try:
+                used = sum(int(v) for _, v in used_rows)
+                free = sum(int(v) for _, v in free_rows)
+                if used + free > 0:
+                    mem = round(used / (used + free) * 100.0, 1)
+            except ValueError:
+                pass
+        return cpu, mem
+
+    async def _fill_perf(self, engine, auth, target, device: Device) -> None:
+        cpu, mem = await self._read_cpu_mem(engine, auth, target)
+        if cpu is not None:
+            device.cpu_usage = round(cpu, 1)
+        if mem is not None:
+            device.memory_usage = mem
 
     async def _collect_neighbors(self, engine, auth, target) -> list[LldpNeighbor]:
         """Walk the LLDP remote table columns and merge by (localPortNum, remIndex)."""
