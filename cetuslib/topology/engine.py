@@ -8,6 +8,7 @@ hard-fails in a minimal environment.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import random
 from collections import defaultdict, deque
@@ -61,7 +62,8 @@ class TopologyEngine:
 
     # ── graph construction ────────────────────────────────────────────────
 
-    def build(self, devices: Iterable[Device]) -> TopologyGraph:
+    def build(self, devices: Iterable[Device],
+              seed_networks: Optional[Iterable[str]] = None) -> TopologyGraph:
         devices = list(devices)
         g = TopologyGraph()
         for d in devices:
@@ -105,8 +107,68 @@ class TopologyEngine:
             linked.update((link.source_id, link.target_id))
         g.orphans = [d.id for d in devices if d.id not in linked]
         g.loops = self.detect_cycles(g)
+        self.assign_levels(g, seed_networks)
         self.graph = g
         return g
+
+    def assign_levels(self, g: TopologyGraph,
+                      seed_networks: Optional[Iterable[str]] = None) -> None:
+        """Assign a 1-based hop level to every device.
+
+        Level 1 = devices whose management IP lies inside one of the
+        ``seed_networks`` (the networks the user asked to scan).  Level N =
+        LLDP neighbour of a level N-1 device.  Devices unreachable from any
+        seed (fully disconnected islands) default to level 2.
+        """
+        subnets: list[ipaddress._BaseNetwork] = []
+        for entry in seed_networks or []:
+            entry = (entry or '').strip()
+            if not entry:
+                continue
+            try:
+                subnets.append(ipaddress.ip_network(entry, strict=False))
+            except ValueError:
+                try:
+                    subnets.append(ipaddress.ip_network(entry + '/32', strict=False))
+                except ValueError:
+                    continue
+
+        def in_seed(ip: str) -> bool:
+            if not ip:
+                return False
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                return False
+            return any(addr in subnet for subnet in subnets)
+
+        for device in g.devices.values():
+            device.layer = 0
+
+        adj: dict[str, list[str]] = defaultdict(list)
+        for link in g.links:
+            adj[link.source_id].append(link.target_id)
+            adj[link.target_id].append(link.source_id)
+
+        queue: deque[str] = deque()
+        for device in g.devices.values():
+            if in_seed(device.ip):
+                device.layer = 1
+                queue.append(device.id)
+
+        while queue:
+            nid = queue.popleft()
+            level = g.devices[nid].layer
+            for nb in adj.get(nid, []):
+                nd = g.devices.get(nb)
+                if nd is None or nd.layer != 0:
+                    continue
+                nd.layer = level + 1
+                queue.append(nb)
+
+        for device in g.devices.values():
+            if device.layer == 0:
+                device.layer = 2
 
     @staticmethod
     def _build_index(devices: list[Device]) -> dict[str, dict[str, str]]:
@@ -194,19 +256,37 @@ class TopologyEngine:
     # ── layouts ───────────────────────────────────────────────────────────
 
     def layout_hierarchical(self, g: TopologyGraph) -> dict[str, tuple[float, float]]:
-        """BFS layering: roots at top, children below, spread horizontally."""
+        """Layer devices vertically by hop level: level 1 on top, level 2
+        below, and so on (spread horizontally within each row).
+
+        Falls back to a BFS-tree layering when levels are missing or uniform
+        (e.g. a graph built without seed networks), so the result is still a
+        sensible top-down tree.
+        """
         if not g.devices:
             return {}
-        if HAS_NETWORKX:
-            nxg = nx.Graph()
-            nxg.add_nodes_from(g.devices)
-            nxg.add_edges_from((l.source_id, l.target_id) for l in g.links)
-            try:
-                pos = nx.spring_layout(nxg, seed=42)
-                return {n: (x * self.SPACING * 4, y * self.SPACING * 3) for n, (x, y) in pos.items()}
-            except Exception:
-                pass
+        levels = {d.layer for d in g.devices.values()}
+        if len(levels) > 1:
+            return self._layout_by_level(g)
+        return self._layout_by_bfs(g)
 
+    def _layout_by_level(self, g: TopologyGraph) -> dict[str, tuple[float, float]]:
+        by_level: dict[int, list[str]] = defaultdict(list)
+        for device_id, device in g.devices.items():
+            by_level[device.layer if device.layer > 0 else 1].append(device_id)
+
+        pos: dict[str, tuple[float, float]] = {}
+        for lvl in sorted(by_level):
+            nodes = sorted(by_level[lvl], key=lambda n: g.devices[n].label)
+            width = (len(nodes) - 1) * self.SPACING
+            for i, node in enumerate(nodes):
+                pos[node] = (
+                    i * self.SPACING - width / 2,
+                    (lvl - 1) * self.SPACING * 1.4,
+                )
+        return pos
+
+    def _layout_by_bfs(self, g: TopologyGraph) -> dict[str, tuple[float, float]]:
         adj: dict[str, list[str]] = defaultdict(list)
         for link in g.links:
             adj[link.source_id].append(link.target_id)
@@ -214,7 +294,6 @@ class TopologyEngine:
 
         roots = self._pick_roots(g, adj)
         layer: dict[str, int] = {}
-        parent: dict[str, str] = {}
         q = deque(roots)
         for r in roots:
             layer[r] = 0
@@ -224,7 +303,6 @@ class TopologyEngine:
                 if nb in layer:
                     continue
                 layer[nb] = layer[node] + 1
-                parent[nb] = node
                 q.append(nb)
 
         for d in g.devices:

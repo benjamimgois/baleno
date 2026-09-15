@@ -72,7 +72,7 @@ class Device:
     status: str = 'unknown'          # 'up' | 'down' | 'unknown'
     latency_ms: float = 0.0
     uptime: str = ''
-    layer: int = 0                   # hierarchy depth (0 = root/core)
+    layer: int = 0                   # 1-based hop level from the seed networks (0 = unassigned)
     interfaces: dict[int, Interface] = field(default_factory=dict)
     lldp_neighbors: list[LldpNeighbor] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)

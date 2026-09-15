@@ -10,11 +10,13 @@ GUI thread never blocks; results are fed back through Qt signals.
 
 from __future__ import annotations
 
+import json
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QPushButton, QLineEdit, QComboBox, QProgressBar, QMessageBox,
-    QApplication, QMenu, QToolButton,
+    QApplication, QMenu, QToolButton, QCheckBox,
 )
 
 from cetuslib.topology.collector import SnmpCredentials
@@ -69,6 +71,15 @@ _TAB_STYLE = """
         font-size: 8pt; color: #333333; height: 14px;
     }
     QProgressBar::chunk { background-color: #26A69A; border-radius: 5px; }
+    QCheckBox {
+        background-color: transparent;
+        color: #333333; font-size: 9pt; spacing: 4px;
+    }
+    QCheckBox::indicator {
+        width: 14px; height: 14px;
+        border: 1px solid #c0c0c0; border-radius: 3px; background: #f5f5f5;
+    }
+    QCheckBox::indicator:checked { background-color: #26A69A; border-color: #26A69A; }
 """
 
 _AUTH_PROTOS = ['None', 'MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512']
@@ -143,6 +154,15 @@ class TopologyTab(QWidget):
         save_btn.clicked.connect(self.view.save_layout)
         layout_row.addWidget(save_btn)
         grid.addLayout(layout_row, 2, 0, 1, 3)
+
+        grid.addWidget(QLabel('Levels:'), 3, 0)
+        levels_widget = QWidget()
+        self.levels_layout = QHBoxLayout()
+        self.levels_layout.setContentsMargins(0, 0, 0, 0)
+        self.levels_layout.setSpacing(8)
+        levels_widget.setLayout(self.levels_layout)
+        grid.addWidget(levels_widget, 3, 1, 1, 2)
+        self.level_checkboxes: list[QCheckBox] = []
 
         return group
 
@@ -243,6 +263,7 @@ class TopologyTab(QWidget):
     def _on_finished(self, graph) -> None:
         self._graph = graph
         self.view.load(graph, self.layout_combo.currentData())
+        self._rebuild_level_filters(graph)
         self.status_label.setText(
             f'{len(graph.devices)} nodes · {len(graph.links)} links · '
             f'{len(graph.orphans)} orphans')
@@ -257,6 +278,41 @@ class TopologyTab(QWidget):
     def _on_layout_changed(self) -> None:
         if self._graph is not None:
             self.view.switch_layout(self.layout_combo.currentData())
+
+    def _rebuild_level_filters(self, graph) -> None:
+        """Create one checkbox per discovered hop level (1..max)."""
+        while self.levels_layout.count():
+            item = self.levels_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.level_checkboxes = []
+
+        hidden = self._hidden_levels()
+        max_level = max((d.layer for d in graph.devices.values()), default=0)
+        for lvl in range(1, max_level + 1):
+            cb = QCheckBox(f'L{lvl}')
+            cb.setChecked(lvl not in hidden)
+            cb.setToolTip(f'Show level {lvl} devices')
+            cb.toggled.connect(self._apply_level_filter)
+            self.levels_layout.addWidget(cb)
+            self.level_checkboxes.append(cb)
+        self.levels_layout.addStretch(1)
+        self._apply_level_filter()
+
+    def _hidden_levels(self) -> set[int]:
+        try:
+            return set(json.loads(self._config.get('topology_hidden_levels') or '[]'))
+        except (ValueError, TypeError):
+            return set()
+
+    def _apply_level_filter(self) -> None:
+        active = {i + 1 for i, cb in enumerate(self.level_checkboxes)
+                  if cb.isChecked()}
+        hidden = [i + 1 for i, cb in enumerate(self.level_checkboxes)
+                  if not cb.isChecked()]
+        self._config.set('topology_hidden_levels', json.dumps(hidden))
+        self.view.set_visible_levels(active)
 
     def _on_node_double_clicked(self, device) -> None:
         DeviceDetailDialog(device, self).show()

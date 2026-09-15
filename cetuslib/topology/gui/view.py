@@ -51,6 +51,17 @@ ROLE_COLOR = {
     DeviceRole.UNKNOWN: QColor(139, 148, 158),
 }
 
+# Hop-level colours: level 1 (seed network) = green, level 2 (LLDP neighbours)
+# = gray, deeper levels = a dimmer slate so the hierarchy stays readable.
+LEVEL_COLOR = {
+    1: QColor(46, 160, 67),      # green
+    2: QColor(139, 148, 158),    # gray
+}
+
+
+def level_color(level: int) -> QColor:
+    return LEVEL_COLOR.get(level, QColor(110, 118, 129))
+
 
 def _status_color(device: Device) -> QColor:
     if device.status == 'up':
@@ -116,6 +127,8 @@ class NodeItem(QGraphicsObject):
         super().__init__()
         self.device = device
         self.edges: list[EdgeItem] = []
+        # Level 2+ devices are less relevant: render smaller icons/fonts.
+        self.scale = 1.0 if device.layer <= 1 else 0.72
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -133,7 +146,9 @@ class NodeItem(QGraphicsObject):
         self.edges.append(edge)
 
     def boundingRect(self) -> QRectF:
-        return QRectF(-self.WIDTH / 2, -self.HEIGHT / 2, self.WIDTH, self.HEIGHT)
+        s = self.scale
+        return QRectF(-self.WIDTH / 2 * s, -self.HEIGHT / 2 * s,
+                      self.WIDTH * s, self.HEIGHT * s)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -147,8 +162,10 @@ class NodeItem(QGraphicsObject):
         super().mouseDoubleClickEvent(event)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
+        painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.boundingRect()
+        painter.scale(self.scale, self.scale)
+        rect = QRectF(-self.WIDTH / 2, -self.HEIGHT / 2, self.WIDTH, self.HEIGHT)
         status = _status_color(self.device)
         border = status if self.isSelected() is False else ACCENT
 
@@ -156,6 +173,19 @@ class NodeItem(QGraphicsObject):
         pen = QPen(ACCENT if self.isSelected() else NODE_BORDER, 2 if self.isSelected() else 1.5)
         painter.setPen(pen)
         painter.drawRoundedRect(rect, 10, 10)
+
+        # left accent bar coloured by hop level (green = seed, gray = neighbour)
+        lvl_color = level_color(self.device.layer)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(lvl_color)
+        painter.drawRoundedRect(QRectF(rect.left(), rect.top() + 10, 4, rect.height() - 20), 2, 2)
+
+        # level badge (bottom-right)
+        painter.setPen(lvl_color)
+        painter.setFont(QFont('Sans', 7, QFont.Weight.Bold))
+        painter.drawText(QRectF(rect.right() - 30, rect.bottom() - 15, 26, 12),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         f'L{self.device.layer or 1}')
 
         # icon circle
         role_color = ROLE_COLOR.get(self.device.role, UNKNOWN)
@@ -191,6 +221,7 @@ class NodeItem(QGraphicsObject):
         painter.drawText(QRectF(rect.right() - 64, rect.top() + 3, 50, 14),
                          Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                          f"{self.device.latency_ms:.0f}ms")
+        painter.restore()
 
 
 class EdgeItem(QGraphicsPathItem):
@@ -250,6 +281,8 @@ class TopologyScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.node_items: dict[str, NodeItem] = {}
+        self.edge_items: list[EdgeItem] = []
+        self.visible_levels: Optional[set] = None
         self.setBackgroundBrush(BG)
         self.setSceneRect(-20000, -20000, 40000, 40000)
 
@@ -257,6 +290,7 @@ class TopologyScene(QGraphicsScene):
                   positions: dict[str, tuple[float, float]] | None = None) -> None:
         self.clear()
         self.node_items = {}
+        self.edge_items = []
 
         engine = TopologyEngine()
         if layout_mode == 'force':
@@ -284,7 +318,30 @@ class TopologyScene(QGraphicsScene):
             src = self.node_items.get(link.source_id)
             dst = self.node_items.get(link.target_id)
             if src and dst:
-                self.addItem(EdgeItem(link, src, dst, offset=offset if link.lag else 0))
+                edge = EdgeItem(link, src, dst, offset=offset if link.lag else 0)
+                self.edge_items.append(edge)
+                self.addItem(edge)
+
+    def set_visible_levels(self, levels: Optional[set]) -> None:
+        """Show only nodes/edges whose devices belong to ``levels``.
+
+        ``None`` shows everything; an empty set hides everything.  An edge is
+        visible only when both endpoints are visible.
+        """
+        self.visible_levels = levels
+        if levels is None:
+            for item in self.node_items.values():
+                item.setVisible(True)
+            for edge in self.edge_items:
+                edge.setVisible(True)
+            return
+
+        for device_id, node in self.node_items.items():
+            node.setVisible(node.device.layer in levels)
+        for edge in self.edge_items:
+            s = edge.source.device.layer in levels
+            t = edge.target.device.layer in levels
+            edge.setVisible(s and t)
 
 
 class Minimap(QGraphicsView):
@@ -393,6 +450,26 @@ class TopologyView(QGraphicsView):
         if rect.isValid():
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
+
+    def set_visible_levels(self, levels: Optional[set]) -> None:
+        """Filter the canvas to the given hop levels (None = show all)."""
+        self._scene.set_visible_levels(levels)
+        self._fit_visible()
+
+    def _fit_visible(self) -> None:
+        """Fit the view to the currently visible node items."""
+        rect = QRectF()
+        first = True
+        for item in self._scene.node_items.values():
+            if item.isVisible():
+                r = item.sceneBoundingRect()
+                rect = r if first else rect.united(r)
+                first = False
+        if first:
+            return
+        self.fitInView(rect.adjusted(-80, -80, 80, 80),
+                       Qt.AspectRatioMode.KeepAspectRatio)
+        self._zoom = self.transform().m11()
 
     def switch_layout(self, layout_mode: str) -> None:
         """Re-layout keeping the current graph (positions are recomputed)."""

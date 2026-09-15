@@ -114,7 +114,7 @@ class TopologyDiscoveryWorker(QThread):
             self._add_placeholders(devices)
 
             self.progress.emit(90, "Building topology graph…")
-            graph = TopologyEngine().build(devices)
+            graph = TopologyEngine().build(devices, seed_networks=self.networks)
             self.progress.emit(100, f"Done — {len(graph.devices)} nodes, "
                                     f"{len(graph.links)} links")
             self.finished.emit(graph)
