@@ -57,6 +57,7 @@ except ImportError:
 from cetuslib.config import ConfigManager
 from cetuslib.constants import VERSION_LABEL
 from cetuslib.automation import AutomationTab
+from cetuslib.topology.tab import TopologyTab
 from cetuslib.network import (
     IperfGraphWidget, SignalHistoryWidget, WifiChannelChart,
     WifiHeatmapWidget, RouteVisualizationWidget, LatencyGraphWidget, PingGraphWidget
@@ -357,6 +358,23 @@ class SerialTerminalGUI(QMainWindow):
             """)
         tab_layout.addWidget(self.automation_tab_btn)
 
+        # Topology tab button (index 10) — network mapping
+        self.topology_tab_btn = QPushButton()
+        self.topology_tab_btn.setFixedSize(62, 52)
+        topology_icon_path = self.get_tab_icon_path('topology.svg')
+        topology_icon = load_svg_icon(topology_icon_path, icon_size) if topology_icon_path else None
+        if topology_icon:
+            self.topology_tab_btn.setIcon(topology_icon)
+            self.topology_tab_btn.setIconSize(self.topology_tab_btn.size() * 0.7)
+        else:
+            self.topology_tab_btn.setIcon(self.style().standardIcon(
+                self.style().StandardPixmap.SP_FileDialogListView))
+        self.topology_tab_btn.setToolTip("Topology\nDiscover and map network topology")
+        self.topology_tab_btn.setCheckable(True)
+        self.topology_tab_btn.clicked.connect(lambda: self.switch_tab(10))
+        self.topology_tab_btn.setStyleSheet(tab_btn_style.format(color='#26A69A'))
+        tab_layout.addWidget(self.topology_tab_btn)
+
         tab_layout.addStretch()
 
         # Settings button (bottom of sidebar)
@@ -431,6 +449,10 @@ class SerialTerminalGUI(QMainWindow):
         self.automation_page = AutomationTab(self.config)
         self.content_stack.addWidget(self.automation_page)
 
+        # Create Topology page (index 10)
+        self.topology_page = TopologyTab(self.config)
+        self.content_stack.addWidget(self.topology_page)
+
         # Add to main layout
         main_h_layout.addWidget(self.tab_widget)
         main_h_layout.addWidget(self.content_stack, 1)
@@ -453,9 +475,10 @@ class SerialTerminalGUI(QMainWindow):
         self.tftp_tab_btn.setChecked(index == 7)
         self.traffic_tab_btn.setChecked(index == 8)
         self.automation_tab_btn.setChecked(index == 9)
+        self.topology_tab_btn.setChecked(index == 10)
         modes = {0: 'ssh', 1: 'serial', 2: 'ipscan', 3: 'snmp',
                  4: 'traceroute', 5: 'wifi', 6: 'iperf', 7: 'tftp', 8: 'traffic',
-                 9: 'automation'}
+                 9: 'automation', 10: 'topology'}
         self.config.set('connection_mode', modes.get(index, 'ssh'))
 
     def _show_settings_menu(self):
