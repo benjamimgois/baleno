@@ -376,7 +376,7 @@ class SerialTerminalGUI(QMainWindow):
         self.topology_tab_btn.clicked.connect(lambda: self.switch_tab(10))
         _tool_btn_style = tab_btn_style.replace('QPushButton', 'QToolButton')
         self.topology_tab_btn.setStyleSheet(
-            _tool_btn_style.format(color='#26A69A') +
+            _tool_btn_style.format(color='#4169E1') +
             """
             QToolButton {
                 font-size: 7pt;

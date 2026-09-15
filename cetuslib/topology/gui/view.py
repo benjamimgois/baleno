@@ -14,7 +14,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QPolygonF,
+    QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPolygonF,
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -29,7 +29,10 @@ from cetuslib.topology.persistence import (
 )
 
 __all__ = ['TopologyView', 'TopologyScene', 'NodeItem', 'EdgeItem',
-           'GroupNodeItem', 'GroupLinkItem', 'load_graph']
+           'GroupNodeItem', 'GroupLinkItem', 'load_graph', 'role_renderer']
+
+# MIME type used to drag a device role from the palette onto the canvas.
+DEVICE_MIME = 'application/x-cetus-topology-device'
 
 
 # ── palette ───────────────────────────────────────────────────────────────
@@ -87,16 +90,7 @@ _NETWORK_ICON_DIRS = [
 _renderer_cache: dict[str, Optional[QSvgRenderer]] = {}
 
 
-def device_renderer(device: Device) -> Optional[QSvgRenderer]:
-    """Return a vector SVG renderer for a device's role (None if unavailable).
-
-    QSvgRenderer keeps the artwork vector: it is rasterised at the exact paint
-    size each frame, so the icon stays crisp at any zoom level (unlike a QIcon,
-    which caches a fixed-resolution pixmap and pixelates when scaled).
-    """
-    name = ROLE_ICON.get(device.role)
-    if not name:
-        return None
+def _renderer_for_name(name: str) -> Optional[QSvgRenderer]:
     if name in _renderer_cache:
         return _renderer_cache[name]
     for base in _NETWORK_ICON_DIRS:
@@ -109,6 +103,22 @@ def device_renderer(device: Device) -> Optional[QSvgRenderer]:
     _renderer_cache[name] = None
     return None
 
+
+def role_renderer(role: DeviceRole) -> Optional[QSvgRenderer]:
+    """Return a vector SVG renderer for a device role (None if unavailable)."""
+    name = ROLE_ICON.get(role)
+    return _renderer_for_name(name) if name else None
+
+
+def device_renderer(device: Device) -> Optional[QSvgRenderer]:
+    """Return a vector SVG renderer for a device's role (None if unavailable).
+
+    QSvgRenderer keeps the artwork vector: it is rasterised at the exact paint
+    size each frame, so the icon stays crisp at any zoom level (unlike a QIcon,
+    which caches a fixed-resolution pixmap and pixelates when scaled).
+    """
+    return role_renderer(device.role)
+
 # Hop-level colours: level 1 (seed network) = green, level 2 (LLDP neighbours)
 # = gray, deeper levels = a dimmer slate so the hierarchy stays readable.
 LEVEL_COLOR = {
@@ -119,6 +129,22 @@ LEVEL_COLOR = {
 
 def level_color(level: int) -> QColor:
     return LEVEL_COLOR.get(level, QColor(110, 118, 129))
+
+
+def _draw_grid(painter: QPainter, rect: QRectF, grid: float = 40.0) -> None:
+    """Draw the faint alignment grid inside ``rect`` (scene coordinates)."""
+    painter.setPen(QPen(GRID_LINE, 1))
+    lines: list[QLineF] = []
+    x = math.floor(rect.left() / grid) * grid
+    while x < rect.right():
+        lines.append(QLineF(x, rect.top(), x, rect.bottom()))
+        x += grid
+    y = math.floor(rect.top() / grid) * grid
+    while y < rect.bottom():
+        lines.append(QLineF(rect.left(), y, rect.right(), y))
+        y += grid
+    if lines:
+        painter.drawLines(lines)
 
 
 def _status_color(device: Device) -> QColor:
@@ -454,25 +480,14 @@ class TopologyScene(QGraphicsScene):
         self.graph: Optional[TopologyGraph] = None
         self.clusters: dict[str, list[str]] = {}
         self.visible_levels: Optional[set] = None
+        self._manual_counter = 0
         self.setBackgroundBrush(BG)
         self.setSceneRect(-20000, -20000, 40000, 40000)
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         """Fill the dark background and draw a faint grid to aid alignment."""
         super().drawBackground(painter, rect)
-        grid = 40.0
-        painter.setPen(QPen(GRID_LINE, 1))
-        lines: list[QLineF] = []
-        x = math.floor(rect.left() / grid) * grid
-        while x < rect.right():
-            lines.append(QLineF(x, rect.top(), x, rect.bottom()))
-            x += grid
-        y = math.floor(rect.top() / grid) * grid
-        while y < rect.bottom():
-            lines.append(QLineF(rect.left(), y, rect.right(), y))
-            y += grid
-        if lines:
-            painter.drawLines(lines)
+        _draw_grid(painter, rect)
 
     def set_graph(self, graph: TopologyGraph, layout_mode: str = 'hierarchical',
                   positions: dict[str, tuple[float, float]] | None = None,
@@ -598,6 +613,18 @@ class TopologyScene(QGraphicsScene):
         for glink in self.group_links:
             glink.setVisible(glink.source.device.layer in levels and 2 in levels)
 
+    def add_manual_device(self, role: DeviceRole, pos: QPointF) -> Device:
+        """Add a manually-placed device node (from the palette) at ``pos``."""
+        self._manual_counter += 1
+        device_id = f'manual-{self._manual_counter}'
+        device = Device(id=device_id, role=role, status='unknown', layer=1)
+        node = NodeItem(device)
+        node.setPos(pos)
+        node.double_clicked.connect(self.node_double_clicked)
+        self.addItem(node)
+        self.node_items[device_id] = node
+        return device
+
 
 class Minimap(QGraphicsView):
     """Small overview view showing the whole scene and the visible area."""
@@ -652,6 +679,7 @@ class TopologyView(QGraphicsView):
         self._zoom = 1.0
         self.minimap = Minimap(self)
         self.layout_path = ''
+        self.setAcceptDrops(True)
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(800)
@@ -741,6 +769,62 @@ class TopologyView(QGraphicsView):
         """Re-layout keeping the current graph (positions are recomputed)."""
         self._scene._apply_layout(layout_mode)
         self.fit_in_view()
+
+    def add_manual_device(self, role: DeviceRole, pos: QPointF) -> Device:
+        """Add a manually-placed device (from the palette) and wire its save."""
+        device = self._scene.add_manual_device(role, pos)
+        self._scene.node_items[device.id].moved.connect(self._schedule_save)
+        return device
+
+    # ── drag-and-drop (device palette → canvas) ──────────────────────────
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(DEVICE_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat(DEVICE_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if event.mimeData().hasFormat(DEVICE_MIME):
+            raw = bytes(event.mimeData().data(DEVICE_MIME))
+            try:
+                role = DeviceRole(raw.decode('utf-8'))
+            except ValueError:
+                role = DeviceRole.UNKNOWN
+            pos = self.mapToScene(event.position().toPoint())
+            self.add_manual_device(role, pos)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    # ── PNG export ───────────────────────────────────────────────────────
+
+    def export_png(self, path: str, scale: float = 2.0) -> bool:
+        """Render the current map (background grid + items) to a PNG file."""
+        scene = self._scene
+        source = scene.itemsBoundingRect().adjusted(-60, -60, 60, 60)
+        if not source.isValid() or source.isEmpty():
+            return False
+        w = max(1, int(source.width() * scale))
+        h = max(1, int(source.height() * scale))
+        image = QImage(w, h, QImage.Format.Format_ARGB32)
+        image.fill(BG)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.save()
+        painter.scale(scale, scale)
+        painter.translate(-source.left(), -source.top())
+        _draw_grid(painter, source)
+        painter.restore()
+        scene.render(painter, QRectF(image.rect()), source)
+        painter.end()
+        return image.save(path, 'PNG')
 
 
 def load_graph(graph: TopologyGraph, layout_mode: str = 'hierarchical') -> TopologyView:

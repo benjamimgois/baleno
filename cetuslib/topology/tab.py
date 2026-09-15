@@ -1,224 +1,374 @@
-"""Topology tab UI — control panel + interactive topology canvas.
+"""Topology tab UI — Ribbon-style control bar + interactive topology canvas.
 
-Wraps the Network Topology Mapper (``cetuslib.topology``) into a tab that
-matches the other Cetus tabs: a light control panel on top (discovery +
-SNMP credentials) and the dark ``TopologyView`` canvas filling the rest.
+Three ribbon tabs (Discovery / Dispositivos / Settings) expose the controls
+above a dark topology canvas.  The whole tab is dark with a royal-blue accent.
 
-The discovery runs inside :class:`TopologyDiscoveryWorker` (QThread) so the
-GUI thread never blocks; results are fed back through Qt signals.
+- Discovery: ICMP + SNMP/LLDP discovery controls, layout and level filters.
+- Dispositivos: a palette of draggable device icons to drop onto the map.
+- Settings: export the current map to PNG, save the layout.
 """
 
 from __future__ import annotations
 
 import json
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QMimeData, QPoint, QRectF, Qt
+from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QComboBox, QProgressBar, QMessageBox,
-    QApplication, QMenu, QToolButton, QCheckBox,
+    QApplication, QMenu, QToolButton, QCheckBox, QButtonGroup,
+    QStackedWidget, QFileDialog,
 )
 
 from cetuslib.topology.collector import SnmpCredentials
 from cetuslib.topology.worker import TopologyDiscoveryWorker
-from cetuslib.topology.gui.view import TopologyView
+from cetuslib.topology.models import Device, DeviceRole
+from cetuslib.topology.gui.view import (
+    TopologyView, DEVICE_MIME, role_renderer,
+)
 from cetuslib.topology.gui.detail import DeviceDetailDialog, GroupDevicesDialog
 from cetuslib.topology.persistence import default_layout_path
 
 __all__ = ['TopologyTab']
 
+_ROYAL = '#4169E1'
+_ROYAL_HOVER = '#3156C8'
+_ROYAL_PRESS = '#2949A8'
+_BG = '#161B22'
+_BG_INPUT = '#0D1117'
+_BG_RIBBON = '#1C2128'
+_BORDER = '#30363D'
+_TEXT = '#C9D1D9'
 
-_TAB_STYLE = """
-    QGroupBox {
-        font-weight: bold; font-size: 9pt;
-        border: 1px solid #c8c8c8; border-radius: 8px;
-        margin-top: 6px; padding-top: 4px;
-        background-color: #f9f9f9;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin; left: 10px;
-        color: #26A69A; background-color: #f9f9f9;
-    }
-    QLabel {
-        background-color: transparent;
-        border: none;
-        color: #555555;
-        font-size: 9pt;
-    }
-    QLineEdit {
-        background-color: #f5f5f5; color: #333333;
-        border: 1px solid #d0d0d0; border-radius: 6px;
-        padding: 2px 8px; font-size: 9pt;
-    }
-    QLineEdit:focus { border: 2px solid #26A69A; }
-    QComboBox {
-        background-color: #f5f5f5; color: #333333;
-        border: 1px solid #d0d0d0; border-radius: 6px;
+_TAB_STYLE = f"""
+    QWidget#topologyRoot {{ background-color: {_BG}; }}
+    QLabel {{ background: transparent; color: {_TEXT}; font-size: 9pt; border: none; }}
+    QLineEdit {{
+        background-color: {_BG_INPUT}; color: #E6EDF3;
+        border: 1px solid {_BORDER}; border-radius: 6px;
+        padding: 3px 8px; font-size: 9pt;
+    }}
+    QLineEdit:focus {{ border: 1px solid {_ROYAL}; }}
+    QLineEdit:disabled {{ color: #6E7681; }}
+    QComboBox {{
+        background-color: {_BG_INPUT}; color: #E6EDF3;
+        border: 1px solid {_BORDER}; border-radius: 6px;
         padding: 2px 6px; font-size: 9pt;
-    }
-    QComboBox:focus { border: 2px solid #26A69A; }
-    QPushButton {
-        background-color: #26A69A; color: #ffffff;
-        border: none; border-radius: 8px;
-        padding: 8px 16px; font-weight: bold; font-size: 10pt;
-    }
-    QPushButton:hover { background-color: #1f8f85; }
-    QPushButton:pressed { background-color: #1a7a71; }
-    QPushButton:disabled { background-color: #b0cfc9; color: #f0f0f0; }
-    QProgressBar {
-        border: 1px solid #d0d0d0; border-radius: 6px;
-        background-color: #f5f5f5; text-align: center;
-        font-size: 8pt; color: #333333; height: 14px;
-    }
-    QProgressBar::chunk { background-color: #26A69A; border-radius: 5px; }
-    QCheckBox {
-        background-color: transparent;
-        color: #333333; font-size: 9pt; spacing: 4px;
-    }
-    QCheckBox::indicator {
+    }}
+    QComboBox:focus {{ border: 1px solid {_ROYAL}; }}
+    QComboBox QAbstractItemView {{
+        background-color: {_BG_INPUT}; color: #E6EDF3;
+        selection-background-color: {_ROYAL};
+    }}
+    QPushButton {{
+        background-color: {_ROYAL}; color: #ffffff;
+        border: none; border-radius: 6px;
+        padding: 6px 14px; font-weight: bold; font-size: 9pt;
+    }}
+    QPushButton:hover {{ background-color: {_ROYAL_HOVER}; }}
+    QPushButton:pressed {{ background-color: {_ROYAL_PRESS}; }}
+    QPushButton:disabled {{ background-color: #2D333B; color: #6E7681; }}
+    QProgressBar {{
+        background-color: {_BG_INPUT}; border: 1px solid {_BORDER}; border-radius: 5px;
+        color: {_TEXT}; font-size: 8pt; text-align: center; height: 14px;
+    }}
+    QProgressBar::chunk {{ background-color: {_ROYAL}; border-radius: 4px; }}
+    QCheckBox {{ background: transparent; color: {_TEXT}; font-size: 9pt; spacing: 4px; }}
+    QCheckBox::indicator {{
         width: 14px; height: 14px;
-        border: 1px solid #c0c0c0; border-radius: 3px; background: #f5f5f5;
-    }
-    QCheckBox::indicator:checked { background-color: #26A69A; border-color: #26A69A; }
+        border: 1px solid #6E7681; border-radius: 3px; background-color: {_BG_INPUT};
+    }}
+    QCheckBox::indicator:checked {{ background-color: {_ROYAL}; border-color: {_ROYAL}; }}
+    QPushButton#ribbonTab {{
+        background: transparent; color: #8B949E;
+        border: none; border-bottom: 2px solid transparent;
+        border-radius: 0; padding: 7px 18px;
+        font-size: 10pt; font-weight: bold;
+    }}
+    QPushButton#ribbonTab:hover {{ color: #E6EDF3; background-color: {_BG_RIBBON}; }}
+    QPushButton#ribbonTab:checked {{
+        color: #E6EDF3; border-bottom: 2px solid {_ROYAL}; background-color: {_BG_RIBBON};
+    }}
+    QFrame#ribbonBody {{ background-color: {_BG_RIBBON}; border-bottom: 1px solid {_BORDER}; }}
+    QFrame#ribbonBar {{ background-color: {_BG}; border: none; }}
 """
 
 _AUTH_PROTOS = ['None', 'MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512']
 _PRIV_PROTOS = ['None', 'DES', '3DES', 'AES', 'AES192', 'AES256']
 
+_PALETTE = [
+    (DeviceRole.ROUTER, 'Router'),
+    (DeviceRole.CORE, 'Switch L3'),
+    (DeviceRole.SWITCH, 'Switch L2'),
+    (DeviceRole.FIREWALL, 'Firewall'),
+    (DeviceRole.SERVER, 'Server'),
+    (DeviceRole.AP, 'Wi-Fi'),
+    (DeviceRole.HOST, 'PC'),
+    (DeviceRole.CAMERA, 'Camera'),
+    (DeviceRole.CLOUD, 'Cloud'),
+    (DeviceRole.UNKNOWN, 'Unknown'),
+]
+
+
+class DevicePaletteButton(QToolButton):
+    """A device-type button in the palette; draggable onto the map."""
+
+    def __init__(self, role: DeviceRole, label: str, parent=None):
+        super().__init__(parent)
+        self.role = role
+        self._label = label
+        self._renderer = role_renderer(role)
+        self.setFixedSize(72, 70)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip(f'Drag a {label} onto the map')
+        self._press_pos = None
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = QColor(28, 33, 40) if (self.underMouse() or self.isDown()) else QColor(22, 27, 34)
+        painter.fillRect(self.rect(), bg)
+        if self._renderer is not None:
+            r = 20.0
+            self._renderer.render(
+                painter, QRectF((self.width() - r * 2) / 2, 6, r * 2, r * 2))
+        painter.setPen(QColor(201, 209, 217))
+        painter.setFont(QFont('Sans', 7))
+        painter.drawText(QRectF(0, self.height() - 17, self.width(), 14),
+                         Qt.AlignmentFlag.AlignCenter, self._label)
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if (self._press_pos is not None
+                and event.buttons() & Qt.MouseButton.LeftButton
+                and (event.position().toPoint() - self._press_pos).manhattanLength()
+                >= QApplication.startDragDistance()):
+            self._start_drag()
+            self._press_pos = None
+            return
+        super().mouseMoveEvent(event)
+
+    def _start_drag(self) -> None:
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(DEVICE_MIME, self.role.value.encode('utf-8'))
+        drag.setMimeData(mime)
+        if self._renderer is not None:
+            pixmap = QPixmap(48, 48)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pixmap)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._renderer.render(p, QRectF(2, 2, 44, 44))
+            p.end()
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(24, 24))
+        drag.exec(Qt.DropAction.CopyAction)
+
 
 class TopologyTab(QWidget):
-    """Discovery + SNMP controls over the interactive topology canvas."""
+    """Ribbon-style controls over the interactive topology canvas."""
 
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
         self._config = config_manager
         self._worker = None
         self._graph = None
+        self.setObjectName('topologyRoot')
         self.setStyleSheet(_TAB_STYLE)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         self.view = TopologyView()
         self.view.set_layout_path(default_layout_path())
         self.view._scene.node_double_clicked.connect(self._on_node_double_clicked)
         self.view._scene.group_clicked.connect(self._on_group_clicked)
 
-        layout.addWidget(self._build_discovery_group())
-        layout.addWidget(self._build_snmp_group())
-        layout.addWidget(self.view, 1)
+        root.addWidget(self._build_ribbon_tabs())
+        self.ribbon_stack = QStackedWidget()
+        self.ribbon_stack.addWidget(self._build_discovery_page())
+        self.ribbon_stack.addWidget(self._build_devices_page())
+        self.ribbon_stack.addWidget(self._build_settings_page())
+        body = QFrame()
+        body.setObjectName('ribbonBody')
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(10, 8, 10, 8)
+        body_layout.addWidget(self.ribbon_stack)
+        root.addWidget(body)
+        root.addWidget(self.view, 1)
 
         self._load_remembered()
-
         QApplication.instance().aboutToQuit.connect(self.shutdown)
 
-    # ── UI construction ──────────────────────────────────────────────────
+    # ── ribbon tab bar ───────────────────────────────────────────────────
 
-    def _build_discovery_group(self) -> QGroupBox:
-        group = QGroupBox('Discovery')
-        grid = QGridLayout(group)
-        grid.setContentsMargins(8, 8, 8, 8)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+    def _build_ribbon_tabs(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName('ribbonBar')
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(6, 4, 6, 0)
+        layout.setSpacing(2)
+        self.tab_group = QButtonGroup(self)
+        self.tab_group.setExclusive(True)
+        self.ribbon_btns: dict[int, QPushButton] = {}
+        for index, label in enumerate(('Discovery', 'Dispositivos', 'Settings')):
+            btn = QPushButton(label)
+            btn.setObjectName('ribbonTab')
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, i=index: self._switch_ribbon(i))
+            self.tab_group.addButton(btn, index)
+            layout.addWidget(btn)
+            self.ribbon_btns[index] = btn
+        layout.addStretch(1)
+        self.ribbon_btns[0].setChecked(True)
+        return bar
 
-        grid.addWidget(QLabel('Networks:'), 0, 0)
+    def _switch_ribbon(self, index: int) -> None:
+        self.ribbon_stack.setCurrentIndex(index)
+        self.ribbon_btns[index].setChecked(True)
+
+    # ── Discovery page ───────────────────────────────────────────────────
+
+    def _build_discovery_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        row0 = QHBoxLayout()
+        row0.setSpacing(8)
+        row0.addWidget(QLabel('Networks:'))
         self.networks_edit = QLineEdit()
         self.networks_edit.setPlaceholderText('10.0.0.0/24, 192.168.1.0/24')
-        grid.addWidget(self.networks_edit, 0, 1)
-
+        row0.addWidget(self.networks_edit, 1)
         self.discover_btn = QPushButton('Discover')
         self.discover_btn.clicked.connect(self.start_discovery)
-        grid.addWidget(self.discover_btn, 0, 2)
-
+        row0.addWidget(self.discover_btn)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        grid.addWidget(self.progress, 1, 0, 1, 2)
-
+        self.progress.setFixedWidth(160)
+        row0.addWidget(self.progress)
         self.status_label = QLabel('Idle')
-        grid.addWidget(self.status_label, 1, 2)
+        self.status_label.setMinimumWidth(120)
+        row0.addWidget(self.status_label)
+        layout.addLayout(row0)
 
-        layout_row = QHBoxLayout()
-        layout_row.setSpacing(8)
-        layout_row.addWidget(QLabel('Layout:'))
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        row1.addWidget(QLabel('Layout:'))
         self.layout_combo = QComboBox()
         self.layout_combo.addItem('Hierarchical (tree)', 'hierarchical')
         self.layout_combo.addItem('Force-directed', 'force')
         self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
-        layout_row.addWidget(self.layout_combo)
-        layout_row.addStretch(1)
+        row1.addWidget(self.layout_combo)
         fit_btn = QPushButton('Fit')
         fit_btn.clicked.connect(self.view.fit_in_view)
-        layout_row.addWidget(fit_btn)
-        save_btn = QPushButton('Save Layout')
-        save_btn.clicked.connect(self.view.save_layout)
-        layout_row.addWidget(save_btn)
-        grid.addLayout(layout_row, 2, 0, 1, 3)
-
-        grid.addWidget(QLabel('Levels:'), 3, 0)
-        levels_widget = QWidget()
+        row1.addWidget(fit_btn)
+        row1.addSpacing(16)
+        row1.addWidget(QLabel('Levels:'))
         self.levels_layout = QHBoxLayout()
         self.levels_layout.setContentsMargins(0, 0, 0, 0)
-        self.levels_layout.setSpacing(8)
-        levels_widget.setLayout(self.levels_layout)
-        grid.addWidget(levels_widget, 3, 1, 1, 2)
+        self.levels_layout.setSpacing(6)
+        row1.addLayout(self.levels_layout)
+        row1.addStretch(1)
+        layout.addLayout(row1)
         self.level_checkboxes: list[QCheckBox] = []
 
-        return group
-
-    def _build_snmp_group(self) -> QGroupBox:
-        group = QGroupBox('SNMP (LLDP)')
-        grid = QGridLayout(group)
-        grid.setContentsMargins(8, 8, 8, 8)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
-
-        grid.addWidget(QLabel('Version:'), 0, 0)
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        row2.addWidget(QLabel('SNMP:'))
         self.version_combo = QComboBox()
         self.version_combo.addItem('v2c', '2c')
         self.version_combo.addItem('v1', '1')
         self.version_combo.addItem('v3', '3')
         self.version_combo.currentIndexChanged.connect(self._on_version_changed)
-        grid.addWidget(self.version_combo, 0, 1)
-
-        grid.addWidget(QLabel('Community:'), 0, 2)
-        community_box = QWidget()
-        community_layout = QHBoxLayout()
-        community_layout.setContentsMargins(0, 0, 0, 0)
-        community_layout.setSpacing(4)
+        row2.addWidget(self.version_combo)
+        row2.addWidget(QLabel('Community:'))
         self.community_edit = QLineEdit('public')
         self.community_hist_btn = QToolButton()
         self.community_hist_btn.setText('▾')
         self.community_hist_btn.setToolTip('Community history (inherited from the SNMP tab)')
         self.community_hist_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.community_hist_btn.clicked.connect(self._show_community_menu)
-        community_layout.addWidget(self.community_edit, 1)
-        community_layout.addWidget(self.community_hist_btn)
-        community_box.setLayout(community_layout)
-        grid.addWidget(community_box, 0, 3)
-
-        grid.addWidget(QLabel('User:'), 0, 4)
+        row2.addWidget(self.community_edit, 1)
+        row2.addWidget(self.community_hist_btn)
+        row2.addWidget(QLabel('User:'))
         self.username_edit = QLineEdit()
-        grid.addWidget(self.username_edit, 0, 5)
-
-        grid.addWidget(QLabel('Auth:'), 1, 0)
+        row2.addWidget(self.username_edit)
+        row2.addWidget(QLabel('Auth:'))
         self.auth_combo = QComboBox()
         self.auth_combo.addItems(_AUTH_PROTOS)
-        grid.addWidget(self.auth_combo, 1, 1)
-
-        grid.addWidget(QLabel('Auth pass:'), 1, 2)
+        row2.addWidget(self.auth_combo)
         self.auth_pass_edit = QLineEdit()
+        self.auth_pass_edit.setPlaceholderText('auth pass')
         self.auth_pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        grid.addWidget(self.auth_pass_edit, 1, 3)
-
-        grid.addWidget(QLabel('Priv:'), 1, 4)
+        row2.addWidget(self.auth_pass_edit)
+        row2.addWidget(QLabel('Priv:'))
         self.priv_combo = QComboBox()
         self.priv_combo.addItems(_PRIV_PROTOS)
-        grid.addWidget(self.priv_combo, 1, 5)
+        row2.addWidget(self.priv_combo)
+        row2.addStretch(1)
+        layout.addLayout(row2)
 
         self._on_version_changed()
-        return group
+        return page
+
+    # ── Devices page ─────────────────────────────────────────────────────
+
+    def _build_devices_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        hint = QLabel('Drag a device onto the map to add it manually.')
+        hint.setStyleSheet('color: #8B949E;')
+        layout.addWidget(hint)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        for role, label in _PALETTE:
+            row.addWidget(DevicePaletteButton(role, label))
+        row.addStretch(1)
+        layout.addLayout(row)
+        return page
+
+    # ── Settings page ────────────────────────────────────────────────────
+
+    def _build_settings_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        export_btn = QPushButton('Export PNG')
+        export_btn.clicked.connect(self._export_png)
+        row.addWidget(export_btn)
+        save_btn = QPushButton('Save Layout')
+        save_btn.clicked.connect(self.view.save_layout)
+        row.addWidget(save_btn)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return page
+
+    def _export_png(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Export topology map', 'topology.png', 'PNG image (*.png)')
+        if not path:
+            return
+        if self.view.export_png(path):
+            self.status_label.setText(f'Exported {path}')
+        else:
+            QMessageBox.warning(self, 'Topology', 'Nothing to export (empty map).')
 
     # ── discovery workflow ───────────────────────────────────────────────
 
@@ -281,7 +431,6 @@ class TopologyTab(QWidget):
             self.view.switch_layout(self.layout_combo.currentData())
 
     def _rebuild_level_filters(self, graph) -> None:
-        """Create one checkbox per discovered hop level (1..max)."""
         while self.levels_layout.count():
             item = self.levels_layout.takeAt(0)
             widget = item.widget()
@@ -322,7 +471,6 @@ class TopologyTab(QWidget):
         GroupDevicesDialog(group.members(), self).show()
 
     def _show_community_menu(self) -> None:
-        """Show the SNMP community history shared with the SNMP tab."""
         history = self._config.get_vuln_community_history()
         menu = QMenu(self)
         if not history:
@@ -337,7 +485,6 @@ class TopologyTab(QWidget):
             self.community_edit.setText(chosen.text())
 
     def _community_list(self) -> list[str]:
-        """Ordered communities to try: current field first, then SNMP history."""
         ordered: list[str] = []
         cur = self.community_edit.text().strip()
         if cur:
@@ -388,7 +535,6 @@ class TopologyTab(QWidget):
                 self.version_combo.setCurrentIndex(idx)
 
     def shutdown(self) -> None:
-        """Stop a running discovery (called from the app shutdown hook)."""
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
             self._worker.wait(15000)
