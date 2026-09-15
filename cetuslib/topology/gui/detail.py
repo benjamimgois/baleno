@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 
 from cetuslib.topology.models import Device
 
-__all__ = ['DeviceDetailDialog']
+__all__ = ['DeviceDetailDialog', 'GroupDevicesDialog']
 
 
 class DeviceDetailDialog(QDialog):
@@ -94,3 +94,36 @@ class DeviceDetailDialog(QDialog):
             table.setItem(row, 4, QTableWidgetItem(n.remote_mgmt_addr))
         layout.addWidget(table)
         return page
+
+
+class GroupDevicesDialog(QDialog):
+    """Read-only table listing the devices collapsed into a group node."""
+
+    def __init__(self, members: list[Device], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f'{len(members)} devices')
+        self.resize(560, 420)
+
+        layout = QVBoxLayout(self)
+        header = QLabel(f'<h3>{len(members)} devices</h3>'
+                        '<span style="color:#8b949e">collapsed to keep the map readable</span>')
+        header.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(['Hostname', 'IP', 'Role', 'Status', 'Vendor/Model'])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setRowCount(len(members))
+        for row, device in enumerate(sorted(members, key=lambda d: d.label.lower())):
+            table.setItem(row, 0, QTableWidgetItem(device.hostname or device.id))
+            table.setItem(row, 1, QTableWidgetItem(device.ip))
+            table.setItem(row, 2, QTableWidgetItem(device.role.value))
+            table.setItem(row, 3, QTableWidgetItem(device.status))
+            table.setItem(row, 4, QTableWidgetItem(f'{device.vendor} {device.model}'.strip()))
+        layout.addWidget(table)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)

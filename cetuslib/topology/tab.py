@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 from cetuslib.topology.collector import SnmpCredentials
 from cetuslib.topology.worker import TopologyDiscoveryWorker
 from cetuslib.topology.gui.view import TopologyView
-from cetuslib.topology.gui.detail import DeviceDetailDialog
+from cetuslib.topology.gui.detail import DeviceDetailDialog, GroupDevicesDialog
 from cetuslib.topology.persistence import default_layout_path
 
 __all__ = ['TopologyTab']
@@ -103,6 +103,7 @@ class TopologyTab(QWidget):
         self.view = TopologyView()
         self.view.set_layout_path(default_layout_path())
         self.view._scene.node_double_clicked.connect(self._on_node_double_clicked)
+        self.view._scene.group_clicked.connect(self._on_group_clicked)
 
         layout.addWidget(self._build_discovery_group())
         layout.addWidget(self._build_snmp_group())
@@ -316,6 +317,9 @@ class TopologyTab(QWidget):
 
     def _on_node_double_clicked(self, device) -> None:
         DeviceDetailDialog(device, self).show()
+
+    def _on_group_clicked(self, group) -> None:
+        GroupDevicesDialog(group.members(), self).show()
 
     def _show_community_menu(self) -> None:
         """Show the SNMP community history shared with the SNMP tab."""

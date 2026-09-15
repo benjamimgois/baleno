@@ -253,40 +253,165 @@ class TopologyEngine:
                     path.pop()
         return cycles
 
+    # ── clustering ────────────────────────────────────────────────────────
+
+    def group_children(self, g: TopologyGraph, threshold: int = 5) -> dict[str, list[str]]:
+        """Find level-1 devices with more than ``threshold`` level-2 neighbours.
+
+        Returns ``{parent_id: [child_id, ...]}`` for the over-populated parents.
+        The returned children are candidates for visual collapsing (a single
+        group node) so the map stays readable.
+        """
+        children: dict[str, set[str]] = defaultdict(set)
+        for link in g.links:
+            src = g.devices.get(link.source_id)
+            dst = g.devices.get(link.target_id)
+            if src is None or dst is None:
+                continue
+            if src.layer == 1 and dst.layer == 2:
+                children[src.id].add(dst.id)
+            elif dst.layer == 1 and src.layer == 2:
+                children[dst.id].add(src.id)
+        return {pid: sorted(ids) for pid, ids in children.items()
+                if len(ids) > threshold}
+
     # ── layouts ───────────────────────────────────────────────────────────
 
-    def layout_hierarchical(self, g: TopologyGraph) -> dict[str, tuple[float, float]]:
-        """Layer devices vertically by hop level: level 1 on top, level 2
-        below, and so on (spread horizontally within each row).
+    def layout_hierarchical(self, g: TopologyGraph,
+                            clusters: Optional[dict[str, list[str]]] = None
+                            ) -> tuple[dict[str, tuple[float, float]],
+                                       dict[str, tuple[float, float]]]:
+        """Return ``(node_pos, group_pos)``.
 
-        Falls back to a BFS-tree layering when levels are missing or uniform
-        (e.g. a graph built without seed networks), so the result is still a
-        sensible top-down tree.
+        Devices are layered vertically by hop level: level 1 on top, level 2
+        below, and so on (spread horizontally within each row).  Children that
+        belong to a ``clusters`` entry are removed from the row and replaced by
+        a single group slot (keyed by the parent id) so collapsed groups still
+        get a non-overlapping position.
         """
         if not g.devices:
-            return {}
-        levels = {d.layer for d in g.devices.values()}
-        if len(levels) > 1:
-            return self._layout_by_level(g)
-        return self._layout_by_bfs(g)
+            return {}, {}
+        clusters = clusters or {}
+        grouped: set[str] = set()
+        for members in clusters.values():
+            grouped.update(members)
 
-    def _layout_by_level(self, g: TopologyGraph) -> dict[str, tuple[float, float]]:
+        levels = {d.layer for d in g.devices.values()}
+        if len(levels) > 1 or clusters:
+            return self._layout_by_level(g, grouped, clusters)
+        return self._layout_by_bfs(g, grouped), {}
+
+    def layout_tree(self, g: TopologyGraph,
+                    clusters: Optional[dict[str, list[str]]] = None
+                    ) -> tuple[dict[str, tuple[float, float]],
+                               dict[str, tuple[float, float]]]:
+        """Column-per-parent layout: each level-1 device owns a column and its
+        level-2 children (and/or its collapsed group circle) sit directly below
+        it.  Remaining devices (deeper levels, orphans, same-level peers) are
+        placed in flat rows underneath.
+
+        This keeps every level-2 device visually attached to its level-1 parent,
+        so nothing appears to float in a disconnected row.
+        """
+        if not g.devices:
+            return {}, {}
+        clusters = clusters or {}
+        grouped: set[str] = set()
+        for members in clusters.values():
+            grouped.update(members)
+
+        # level-2 children of each level-1 device
+        children: dict[str, set[str]] = defaultdict(set)
+        for link in g.links:
+            src = g.devices.get(link.source_id)
+            dst = g.devices.get(link.target_id)
+            if src is None or dst is None:
+                continue
+            if src.layer <= 1 and dst.layer == 2:
+                children[src.id].add(dst.id)
+            elif dst.layer <= 1 and src.layer == 2:
+                children[dst.id].add(src.id)
+
+        l1 = sorted((d.id for d in g.devices.values() if d.layer <= 1),
+                    key=lambda n: g.devices[n].label)
+        pos: dict[str, tuple[float, float]] = {}
+        group_pos: dict[str, tuple[float, float]] = {}
+
+        spacing = self.SPACING
+        l1_width = (len(l1) - 1) * spacing
+        l1_x: dict[str, float] = {}
+        for i, n in enumerate(l1):
+            x = i * spacing - l1_width / 2
+            l1_x[n] = x
+            pos[n] = (x, 0.0)
+
+        y2 = spacing * 1.4
+        for parent in l1:
+            kids = sorted([k for k in children.get(parent, ()) if k not in grouped],
+                          key=lambda n: g.devices[n].label)
+            has_group = parent in clusters
+            slots = len(kids) + (1 if has_group else 0)
+            start_x = l1_x[parent] - (slots - 1) * spacing / 2
+            idx = 0
+            if has_group:
+                group_pos[parent] = (start_x + idx * spacing, y2)
+                idx += 1
+            for kid in kids:
+                pos[kid] = (start_x + idx * spacing, y2)
+                idx += 1
+
+        # remaining devices → flat rows by level
+        remaining = [d.id for d in g.devices.values()
+                     if d.id not in pos and d.id not in grouped]
+        by_layer: dict[int, list[str]] = defaultdict(list)
+        for n in remaining:
+            lvl = g.devices[n].layer if g.devices[n].layer > 0 else 1
+            if lvl <= 2:
+                lvl = 2
+            by_layer[lvl].append(n)
+        for lvl in sorted(by_layer):
+            nodes = sorted(by_layer[lvl], key=lambda n: g.devices[n].label)
+            width = (len(nodes) - 1) * spacing
+            y = (lvl - 1) * spacing * 1.4
+            for i, n in enumerate(nodes):
+                pos[n] = (i * spacing - width / 2, y)
+        return pos, group_pos
+
+    def _layout_by_level(self, g: TopologyGraph, grouped: set[str],
+                         clusters: dict[str, list[str]]
+                         ) -> tuple[dict[str, tuple[float, float]],
+                                    dict[str, tuple[float, float]]]:
         by_level: dict[int, list[str]] = defaultdict(list)
         for device_id, device in g.devices.items():
+            if device_id in grouped:
+                continue
             by_level[device.layer if device.layer > 0 else 1].append(device_id)
 
-        pos: dict[str, tuple[float, float]] = {}
-        for lvl in sorted(by_level):
-            nodes = sorted(by_level[lvl], key=lambda n: g.devices[n].label)
-            width = (len(nodes) - 1) * self.SPACING
-            for i, node in enumerate(nodes):
-                pos[node] = (
-                    i * self.SPACING - width / 2,
-                    (lvl - 1) * self.SPACING * 1.4,
-                )
-        return pos
+        group_levels: dict[int, list[str]] = defaultdict(list)
+        for parent_id in clusters:
+            group_levels[2].append(parent_id)
 
-    def _layout_by_bfs(self, g: TopologyGraph) -> dict[str, tuple[float, float]]:
+        pos: dict[str, tuple[float, float]] = {}
+        group_pos: dict[str, tuple[float, float]] = {}
+        for lvl in sorted(set(by_level) | set(group_levels)):
+            entries: list[tuple[object, str]] = []
+            for node in by_level.get(lvl, []):
+                entries.append((node, g.devices[node].label))
+            for pid in group_levels.get(lvl, []):
+                entries.append((('__group__', pid), g.devices[pid].label))
+            entries.sort(key=lambda e: e[1])
+            width = (len(entries) - 1) * self.SPACING
+            for i, (key, _label) in enumerate(entries):
+                x = i * self.SPACING - width / 2
+                y = (lvl - 1) * self.SPACING * 1.4
+                if isinstance(key, tuple):
+                    group_pos[key[1]] = (x, y)
+                else:
+                    pos[key] = (x, y)
+        return pos, group_pos
+
+    def _layout_by_bfs(self, g: TopologyGraph,
+                       grouped: set[str]) -> dict[str, tuple[float, float]]:
         adj: dict[str, list[str]] = defaultdict(list)
         for link in g.links:
             adj[link.source_id].append(link.target_id)

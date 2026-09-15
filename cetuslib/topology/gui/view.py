@@ -21,10 +21,11 @@ from PyQt6.QtWidgets import (
 from cetuslib.topology.models import Device, DeviceRole, PortLink, TopologyGraph
 from cetuslib.topology.engine import TopologyEngine
 from cetuslib.topology.persistence import (
-    apply_layout, load_layout, save_layout, default_layout_path,
+    apply_layout, load_layout, load_group_layout, save_layout, default_layout_path,
 )
 
-__all__ = ['TopologyView', 'TopologyScene', 'NodeItem', 'EdgeItem', 'load_graph']
+__all__ = ['TopologyView', 'TopologyScene', 'NodeItem', 'EdgeItem',
+           'GroupNodeItem', 'GroupLinkItem', 'load_graph']
 
 
 # ── palette ───────────────────────────────────────────────────────────────
@@ -273,45 +274,145 @@ class EdgeItem(QGraphicsPathItem):
         painter.drawText(QPointF(mid.x() - tw / 2, mid.y() + 3), label)
 
 
+class GroupNodeItem(QGraphicsObject):
+    """A circle collapsing several level-2 devices under one level-1 parent.
+
+    Drawn as a distinct shape (dashed circle) so it never overlaps the
+    individual icons it replaces.  Clicking it emits :attr:`clicked` so the
+    UI can show a table of its member devices.
+    """
+
+    RADIUS = 22.0
+    clicked = pyqtSignal(object)   # emits the GroupNodeItem
+    moved = pyqtSignal(object)     # emits the GroupNodeItem
+
+    def __init__(self, parent_id: str, member_ids: list[str], graph: TopologyGraph):
+        super().__init__()
+        self.parent_id = parent_id
+        self.member_ids = list(member_ids)
+        self.graph = graph
+        self.links: list[GroupLinkItem] = []
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setAcceptHoverEvents(True)
+        self.setZValue(5)
+        self.setToolTip(self._tooltip())
+
+    def members(self) -> list[Device]:
+        return [self.graph.devices[m] for m in self.member_ids
+                if m in self.graph.devices]
+
+    def _tooltip(self) -> str:
+        return f'{len(self.member_ids)} devices (click to list, drag to move)'
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            for link in self.links:
+                link.update_path()
+            self.moved.emit(self)
+        return super().itemChange(change, value)
+
+    def boundingRect(self) -> QRectF:
+        r = self.RADIUS + 12.0
+        return QRectF(-r, -r, r * 2, r * 2)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = level_color(2)
+        pen = QPen(ACCENT if self.isSelected() else color, 2, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(QColor(22, 27, 34))
+        painter.drawEllipse(QPointF(0, 0), self.RADIUS, self.RADIUS)
+
+        painter.setPen(color)
+        painter.setFont(QFont('Sans', 10, QFont.Weight.Bold))
+        painter.drawText(QRectF(-self.RADIUS, -8, self.RADIUS * 2, 18),
+                         Qt.AlignmentFlag.AlignCenter,
+                         str(len(self.member_ids)))
+        painter.setFont(QFont('Sans', 6))
+        painter.drawText(QRectF(-self.RADIUS, 6, self.RADIUS * 2, 12),
+                         Qt.AlignmentFlag.AlignCenter, 'devices')
+
+    def mousePressEvent(self, event) -> None:
+        self.clicked.emit(self)
+        super().mousePressEvent(event)
+
+
+class GroupLinkItem(QGraphicsPathItem):
+    """A dashed line from a level-1 parent to a collapsed group node."""
+
+    def __init__(self, source: NodeItem, target: GroupNodeItem):
+        super().__init__()
+        self.source = source
+        self.target = target
+        self.setZValue(0)
+        self.setPen(QPen(EDGE, 1.5, Qt.PenStyle.DashLine))
+        source.moved.connect(self.update_path)
+        target.links.append(self)
+        self.update_path()
+
+    def update_path(self, *args) -> None:
+        path = QPainterPath(self.source.pos())
+        path.lineTo(self.target.pos())
+        self.setPath(path)
+
+
 class TopologyScene(QGraphicsScene):
     """Scene holding node/edge items and their device graph."""
 
     node_double_clicked = pyqtSignal(object)
+    group_clicked = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.node_items: dict[str, NodeItem] = {}
         self.edge_items: list[EdgeItem] = []
+        self.group_items: dict[str, GroupNodeItem] = {}
+        self.group_links: list[GroupLinkItem] = []
+        self.graph: Optional[TopologyGraph] = None
+        self.clusters: dict[str, list[str]] = {}
         self.visible_levels: Optional[set] = None
         self.setBackgroundBrush(BG)
         self.setSceneRect(-20000, -20000, 40000, 40000)
 
     def set_graph(self, graph: TopologyGraph, layout_mode: str = 'hierarchical',
-                  positions: dict[str, tuple[float, float]] | None = None) -> None:
+                  positions: dict[str, tuple[float, float]] | None = None,
+                  group_positions: dict[str, tuple[float, float]] | None = None) -> None:
         self.clear()
         self.node_items = {}
         self.edge_items = []
+        self.group_items = {}
+        self.group_links = []
+        self.graph = graph
 
         engine = TopologyEngine()
-        if layout_mode == 'force':
-            pos = engine.layout_force(graph)
-        else:
-            pos = engine.layout_hierarchical(graph)
-        if positions:
-            pos = apply_layout(graph, positions, pos)
+        self.clusters = engine.group_children(graph)
+        grouped: set[str] = set()
+        for members in self.clusters.values():
+            grouped.update(members)
 
-        # nodes
+        # nodes (skip grouped members — they collapse into a group circle)
         for device_id, device in graph.devices.items():
+            if device_id in grouped:
+                continue
             node = NodeItem(device)
-            x, y = pos.get(device_id, (0.0, 0.0))
-            node.setPos(x, y)
             node.double_clicked.connect(self.node_double_clicked)
             self.addItem(node)
             self.node_items[device_id] = node
 
-        # edges (offset parallel links in a LAG so they don't overlap)
+        # group nodes (one per over-populated level-1 parent)
+        for parent_id, member_ids in self.clusters.items():
+            gnode = GroupNodeItem(parent_id, member_ids, graph)
+            gnode.clicked.connect(self.group_clicked)
+            self.addItem(gnode)
+            self.group_items[parent_id] = gnode
+
+        # edges (skip any link touching a collapsed member)
         seen: dict[frozenset, int] = {}
         for link in graph.links:
+            if link.source_id in grouped or link.target_id in grouped:
+                continue
             key = frozenset((link.source_id, link.target_id))
             offset = seen.get(key, 0)
             seen[key] = offset + 1 if link.lag else 0
@@ -322,11 +423,59 @@ class TopologyScene(QGraphicsScene):
                 self.edge_items.append(edge)
                 self.addItem(edge)
 
+        # dashed line from each level-1 parent to its collapsed group
+        for parent_id, gnode in self.group_items.items():
+            src = self.node_items.get(parent_id)
+            if src is not None:
+                glink = GroupLinkItem(src, gnode)
+                self.group_links.append(glink)
+                self.addItem(glink)
+
+        self._apply_layout(layout_mode, positions, group_positions)
+
+    def _apply_layout(self, layout_mode: str,
+                      positions: dict[str, tuple[float, float]] | None = None,
+                      group_positions: dict[str, tuple[float, float]] | None = None) -> None:
+        if self.graph is None:
+            return
+        engine = TopologyEngine()
+        if layout_mode == 'force':
+            node_pos = engine.layout_force(self.graph)
+            group_pos: dict[str, tuple[float, float]] = {}
+            for parent_id, gnode in self.group_items.items():
+                xs: list[float] = []
+                ys: list[float] = []
+                for m in gnode.member_ids:
+                    p = node_pos.get(m)
+                    if p:
+                        xs.append(p[0])
+                        ys.append(p[1])
+                if xs:
+                    group_pos[parent_id] = (sum(xs) / len(xs), sum(ys) / len(ys))
+                else:
+                    pp = node_pos.get(parent_id, (0.0, 0.0))
+                    group_pos[parent_id] = (pp[0], pp[1] + TopologyEngine.SPACING * 1.4)
+        else:
+            node_pos, group_pos = engine.layout_tree(self.graph, self.clusters)
+
+        if positions:
+            node_pos = apply_layout(self.graph, positions, node_pos)
+        if group_positions:
+            for pid, xy in group_positions.items():
+                if pid in self.graph.devices:
+                    group_pos[pid] = xy
+
+        for device_id, node in self.node_items.items():
+            node.setPos(*node_pos.get(device_id, (0.0, 0.0)))
+        for parent_id, gnode in self.group_items.items():
+            gnode.setPos(*group_pos.get(parent_id, (0.0, 0.0)))
+
     def set_visible_levels(self, levels: Optional[set]) -> None:
         """Show only nodes/edges whose devices belong to ``levels``.
 
         ``None`` shows everything; an empty set hides everything.  An edge is
-        visible only when both endpoints are visible.
+        visible only when both endpoints are visible.  A collapsed group is
+        treated as a level-2 item.
         """
         self.visible_levels = levels
         if levels is None:
@@ -334,14 +483,21 @@ class TopologyScene(QGraphicsScene):
                 item.setVisible(True)
             for edge in self.edge_items:
                 edge.setVisible(True)
+            for gnode in self.group_items.values():
+                gnode.setVisible(True)
+            for glink in self.group_links:
+                glink.setVisible(True)
             return
 
-        for device_id, node in self.node_items.items():
+        for node in self.node_items.values():
             node.setVisible(node.device.layer in levels)
         for edge in self.edge_items:
-            s = edge.source.device.layer in levels
-            t = edge.target.device.layer in levels
-            edge.setVisible(s and t)
+            edge.setVisible(edge.source.device.layer in levels
+                            and edge.target.device.layer in levels)
+        for gnode in self.group_items.values():
+            gnode.setVisible(2 in levels)
+        for glink in self.group_links:
+            glink.setVisible(glink.source.device.layer in levels and 2 in levels)
 
 
 class Minimap(QGraphicsView):
@@ -410,14 +566,17 @@ class TopologyView(QGraphicsView):
         return {did: (it.pos().x(), it.pos().y())
                 for did, it in self._scene.node_items.items()}
 
+    def current_group_positions(self) -> dict[str, tuple[float, float]]:
+        return {pid: (g.pos().x(), g.pos().y())
+                for pid, g in self._scene.group_items.items()}
+
     def save_layout(self) -> None:
-        """Write current node coordinates to ``layout_path`` (if set)."""
+        """Write current node/group coordinates to ``layout_path`` (if set)."""
         if not self.layout_path:
             return
-        graph = TopologyGraph()
-        for device_id, item in self._scene.node_items.items():
-            graph.add_device(item.device)
-        save_layout(graph, self.current_positions(), self.layout_path)
+        graph = self._scene.graph if self._scene.graph is not None else TopologyGraph()
+        save_layout(graph, self.current_positions(), self.layout_path,
+                    group_positions=self.current_group_positions())
 
     def _schedule_save(self, *args) -> None:
         if self.layout_path:
@@ -440,9 +599,12 @@ class TopologyView(QGraphicsView):
 
     def load(self, graph: TopologyGraph, layout_mode: str = 'hierarchical') -> None:
         saved = load_layout(self.layout_path) if self.layout_path else {}
-        self._scene.set_graph(graph, layout_mode, saved)
+        saved_groups = load_group_layout(self.layout_path) if self.layout_path else {}
+        self._scene.set_graph(graph, layout_mode, saved, saved_groups)
         for item in self._scene.node_items.values():
             item.moved.connect(self._schedule_save)
+        for gnode in self._scene.group_items.values():
+            gnode.moved.connect(self._schedule_save)
         self.fit_in_view()
 
     def fit_in_view(self) -> None:
@@ -457,12 +619,17 @@ class TopologyView(QGraphicsView):
         self._fit_visible()
 
     def _fit_visible(self) -> None:
-        """Fit the view to the currently visible node items."""
+        """Fit the view to the currently visible node/group items."""
         rect = QRectF()
         first = True
         for item in self._scene.node_items.values():
             if item.isVisible():
                 r = item.sceneBoundingRect()
+                rect = r if first else rect.united(r)
+                first = False
+        for gnode in self._scene.group_items.values():
+            if gnode.isVisible():
+                r = gnode.sceneBoundingRect()
                 rect = r if first else rect.united(r)
                 first = False
         if first:
@@ -473,15 +640,7 @@ class TopologyView(QGraphicsView):
 
     def switch_layout(self, layout_mode: str) -> None:
         """Re-layout keeping the current graph (positions are recomputed)."""
-        graph = TopologyGraph()
-        for device_id, item in self._scene.node_items.items():
-            graph.add_device(item.device)
-        # rebuild links from existing edge items
-        engine = TopologyEngine()
-        pos = (engine.layout_force(graph) if layout_mode == 'force'
-               else engine.layout_hierarchical(graph))
-        for device_id, item in self._scene.node_items.items():
-            item.setPos(*pos.get(device_id, (0.0, 0.0)))
+        self._scene._apply_layout(layout_mode)
         self.fit_in_view()
 
 

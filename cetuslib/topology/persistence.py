@@ -9,10 +9,13 @@ The file format is deliberately simple so it can be hand-edited and
 version-controlled::
 
     {
-        "version": 1,
+        "version": 2,
         "positions": {
             "SW-CORE": [120.0, -84.0],
             "RTR-EDGE": [-310.5, 0.0]
+        },
+        "groups": {
+            "SW-CORE": [120.0, 200.0]
         }
     }
 """
@@ -26,7 +29,8 @@ from typing import Optional
 
 from cetuslib.topology.models import TopologyGraph
 
-__all__ = ['save_layout', 'load_layout', 'default_layout_path']
+__all__ = ['save_layout', 'load_layout', 'load_group_layout',
+           'default_layout_path']
 
 
 def default_layout_path() -> str:
@@ -35,32 +39,47 @@ def default_layout_path() -> str:
     return os.path.join(xdg, 'cetus', 'topology_layout.json')
 
 
+def _round(xy: tuple[float, float]) -> list[float]:
+    return [round(xy[0], 1), round(xy[1], 1)]
+
+
 def save_layout(graph: TopologyGraph, positions: dict[str, tuple[float, float]],
-                path: str) -> None:
-    """Persist node coordinates for ``graph`` as JSON at ``path``."""
+                path: str,
+                group_positions: Optional[dict[str, tuple[float, float]]] = None) -> None:
+    """Persist node (and optional group) coordinates for ``graph`` as JSON."""
     payload = {
-        'version': 1,
-        'positions': {k: [round(v[0], 1), round(v[1], 1)]
-                      for k, v in positions.items() if k in graph.devices},
+        'version': 2,
+        'positions': {k: _round(v) for k, v in positions.items()
+                      if k in graph.devices},
+        'groups': {k: _round(v) for k, v in (group_positions or {}).items()
+                   if k in graph.devices},
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, 'w') as f:
         json.dump(payload, f, indent=4)
 
 
-def load_layout(path: str) -> dict[str, tuple[float, float]]:
-    """Read saved coordinates from ``path`` (empty dict on any error)."""
+def _load_map(path: str, key: str) -> dict[str, tuple[float, float]]:
     try:
         with open(path) as f:
             data = json.load(f)
-        positions = data.get('positions', {})
         out: dict[str, tuple[float, float]] = {}
-        for key, xy in positions.items():
+        for k, xy in data.get(key, {}).items():
             if isinstance(xy, (list, tuple)) and len(xy) == 2:
-                out[key] = (float(xy[0]), float(xy[1]))
+                out[k] = (float(xy[0]), float(xy[1]))
         return out
     except (OSError, ValueError, TypeError):
         return {}
+
+
+def load_layout(path: str) -> dict[str, tuple[float, float]]:
+    """Read saved node coordinates from ``path`` (empty dict on any error)."""
+    return _load_map(path, 'positions')
+
+
+def load_group_layout(path: str) -> dict[str, tuple[float, float]]:
+    """Read saved collapsed-group coordinates from ``path``."""
+    return _load_map(path, 'groups')
 
 
 def apply_layout(graph: TopologyGraph, positions: dict[str, tuple[float, float]],
