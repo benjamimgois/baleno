@@ -465,7 +465,7 @@ class SerialTerminalGUI(QMainWindow):
         self.content_stack.addWidget(self.automation_page)
 
         # Create Topology page (index 10)
-        self.topology_page = TopologyTab(self.config)
+        self.topology_page = TopologyTab(self.config, main_window=self)
         self.content_stack.addWidget(self.topology_page)
 
         # Add to main layout

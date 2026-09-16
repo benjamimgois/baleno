@@ -23,7 +23,12 @@ class DeviceRole(str, Enum):
     AP = 'ap'                # wireless access point
     CAMERA = 'camera'        # surveillance / IP camera / NVR
     CLOUD = 'cloud'          # WAN / internet / cloud appliance
+    CLOUD2 = 'cloud2'        # cloud service variant
+    CLOUD3 = 'cloud3'        # cloud service variant
+    CLOUD4 = 'cloud4'        # cloud service variant
+    INTERNET = 'internet'    # internet / WAN uplink
     HOST = 'host'            # generic endpoint (PC, printer, IP phone...)
+    PHONE = 'phone'          # IP phone / VoIP endpoint
     UNKNOWN = 'unknown'
 
 
@@ -97,6 +102,39 @@ class Device:
     def up(self) -> bool:
         return self.status in ('up', 'active')
 
+    def to_dict(self) -> dict[str, Any]:
+        """Identity fields only — ephemeral runtime data (interfaces, LLDP,
+        CPU/memory, rates) is intentionally excluded from persistence."""
+        return {
+            'id': self.id,
+            'ip': self.ip,
+            'hostname': self.hostname,
+            'role': self.role.value,
+            'vendor': self.vendor,
+            'model': self.model,
+            'chassis_id': self.chassis_id,
+            'status': self.status,
+            'layer': self.layer,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> 'Device':
+        try:
+            role = DeviceRole(data.get('role', DeviceRole.UNKNOWN.value))
+        except ValueError:
+            role = DeviceRole.UNKNOWN
+        return cls(
+            id=str(data.get('id', '')),
+            ip=str(data.get('ip', '') or ''),
+            hostname=str(data.get('hostname', '') or ''),
+            role=role,
+            vendor=str(data.get('vendor', '') or ''),
+            model=str(data.get('model', '') or ''),
+            chassis_id=str(data.get('chassis_id', '') or ''),
+            status=str(data.get('status', 'unknown') or 'unknown'),
+            layer=int(data.get('layer', 0) or 0),
+        )
+
 
 @dataclass
 class PortLink:
@@ -120,6 +158,31 @@ class PortLink:
     def touches(self, device_id: str) -> bool:
         return device_id in (self.source_id, self.target_id)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'source_id': self.source_id,
+            'source_port': self.source_port,
+            'target_id': self.target_id,
+            'target_port': self.target_port,
+            'source_ifindex': self.source_ifindex,
+            'lag': self.lag,
+            'weight': self.weight,
+            'status': self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> 'PortLink':
+        return cls(
+            source_id=str(data.get('source_id', '')),
+            source_port=str(data.get('source_port', '') or ''),
+            target_id=str(data.get('target_id', '')),
+            target_port=str(data.get('target_port', '') or ''),
+            source_ifindex=int(data.get('source_ifindex', 0) or 0),
+            lag=bool(data.get('lag', False)),
+            weight=int(data.get('weight', 1) or 1),
+            status=str(data.get('status', 'up') or 'up'),
+        )
+
 
 @dataclass
 class TopologyGraph:
@@ -136,3 +199,22 @@ class TopologyGraph:
 
     def get_device(self, device_id: str) -> Optional[Device]:
         return self.devices.get(device_id)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'devices': {did: dev.to_dict() for did, dev in self.devices.items()},
+            'links': [link.to_dict() for link in self.links],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> 'TopologyGraph':
+        graph = cls()
+        for did, ddata in (data.get('devices') or {}).items():
+            device = Device.from_dict(ddata)
+            if device.id:
+                graph.devices[did] = device
+        for ldata in data.get('links') or []:
+            link = PortLink.from_dict(ldata)
+            if link.source_id in graph.devices and link.target_id in graph.devices:
+                graph.links.append(link)
+        return graph

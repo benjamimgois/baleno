@@ -22,6 +22,9 @@ from cetuslib.topology.persistence import (
     load_layout,
     apply_layout,
     default_layout_path,
+    save_map,
+    load_map,
+    default_map_path,
 )
 
 __all__ = [
@@ -36,4 +39,7 @@ __all__ = [
     'load_layout',
     'apply_layout',
     'default_layout_path',
+    'save_map',
+    'load_map',
+    'default_map_path',
 ]

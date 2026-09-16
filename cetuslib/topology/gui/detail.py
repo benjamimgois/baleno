@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHeaderView, QLabel,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHeaderView,
+    QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
-from cetuslib.topology.models import Device
+from cetuslib.topology.models import Device, DeviceRole
 
 __all__ = ['DeviceDetailDialog', 'GroupDevicesDialog']
 
 
 class DeviceDetailDialog(QDialog):
-    """Read-only detail view: identity, interfaces, LLDP neighbours."""
+    """Detail view with an editable Identity tab.
+
+    Editable identity fields (hostname, ip, role, vendor, model, status, layer)
+    mutate the underlying :class:`Device` on "Apply" and emit :attr:`device_changed`
+    so the caller can persist the map and repaint the node.
+    """
+
+    device_changed = pyqtSignal(object)
 
     def __init__(self, device: Device, parent=None):
         super().__init__(parent)
@@ -43,11 +51,46 @@ class DeviceDetailDialog(QDialog):
         page = QWidget()
         form = QFormLayout(page)
         d = self.device
-        form.addRow("Vendor", QLabel(d.vendor or '—'))
-        form.addRow("Model", QLabel(d.model or '—'))
+
+        self.hostname_edit = QLineEdit(d.hostname)
+        form.addRow("Hostname", self.hostname_edit)
+
+        self.ip_edit = QLineEdit(d.ip)
+        form.addRow("IP", self.ip_edit)
+
+        self.role_combo = QComboBox()
+        for role in DeviceRole:
+            self.role_combo.addItem(role.value.upper(), role)
+        idx = self.role_combo.findData(d.role)
+        if idx >= 0:
+            self.role_combo.setCurrentIndex(idx)
+        form.addRow("Role", self.role_combo)
+
+        self.vendor_edit = QLineEdit(d.vendor)
+        form.addRow("Vendor", self.vendor_edit)
+
+        self.model_edit = QLineEdit(d.model)
+        form.addRow("Model", self.model_edit)
+
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(['up', 'down', 'unknown'])
+        idx = self.status_combo.findText(d.status)
+        if idx >= 0:
+            self.status_combo.setCurrentIndex(idx)
+        form.addRow("Status", self.status_combo)
+
+        self.layer_spin = QSpinBox()
+        self.layer_spin.setRange(0, 20)
+        self.layer_spin.setValue(d.layer)
+        form.addRow("Layer", self.layer_spin)
+
         form.addRow("Chassis ID", QLabel(d.chassis_id or '—'))
         form.addRow("Uptime", QLabel(d.uptime or '—'))
         form.addRow("Latency", QLabel(f"{d.latency_ms:.1f} ms" if d.latency_ms else '—'))
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self._apply_identity)
+        form.addRow(apply_btn)
 
         desc_group = QGroupBox("System Description")
         desc_layout = QVBoxLayout(desc_group)
@@ -57,6 +100,18 @@ class DeviceDetailDialog(QDialog):
         desc_layout.addWidget(desc)
         form.addRow(desc_group)
         return page
+
+    def _apply_identity(self) -> None:
+        d = self.device
+        d.hostname = self.hostname_edit.text().strip()
+        d.ip = self.ip_edit.text().strip()
+        d.role = self.role_combo.currentData()
+        d.vendor = self.vendor_edit.text().strip()
+        d.model = self.model_edit.text().strip()
+        d.status = self.status_combo.currentText()
+        d.layer = self.layer_spin.value()
+        self.setWindowTitle(f"{d.label} — Device Details")
+        self.device_changed.emit(d)
 
     def _interfaces_tab(self) -> QWidget:
         page = QWidget()

@@ -1,10 +1,13 @@
 """Network scanning, discovery, testing and visualization widgets for Cetus."""
 
 import math
+import os
 import time
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
 from PyQt6.QtWidgets import *
+
+from cetuslib.utils import load_svg_icon
 
 
 __all__ = [

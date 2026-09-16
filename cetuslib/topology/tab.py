@@ -1,24 +1,25 @@
 """Topology tab UI — Ribbon-style control bar + interactive topology canvas.
 
-Three ribbon tabs (Discovery / Dispositivos / Settings) expose the controls
+Three ribbon tabs (Discovery / Objects / Settings) expose the controls
 above a dark topology canvas.  The whole tab is dark with a royal-blue accent.
 
 - Discovery: ICMP + SNMP/LLDP discovery controls, layout and level filters.
-- Dispositivos: a palette of draggable device icons to drop onto the map.
+- Objects: a palette of draggable device icons to drop onto the map.
 - Settings: export the current map to PNG, save the layout.
 """
 
 from __future__ import annotations
 
 import json
+import os
 
-from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QComboBox, QProgressBar, QMessageBox,
     QApplication, QMenu, QToolButton, QCheckBox, QButtonGroup,
-    QStackedWidget, QFileDialog,
+    QStackedWidget, QFileDialog, QScrollArea,
 )
 
 from cetuslib.topology.collector import SnmpCredentials
@@ -29,7 +30,8 @@ from cetuslib.topology.gui.view import (
     TopologyView, DEVICE_MIME, role_renderer,
 )
 from cetuslib.topology.gui.detail import DeviceDetailDialog, GroupDevicesDialog
-from cetuslib.topology.persistence import default_layout_path
+from cetuslib.topology.persistence import default_map_path
+from cetuslib.topology.actions import TopologyActions
 
 __all__ = ['TopologyTab']
 
@@ -106,8 +108,13 @@ _PALETTE = [
     (DeviceRole.SERVER, 'Server'),
     (DeviceRole.AP, 'Wi-Fi'),
     (DeviceRole.HOST, 'PC'),
+    (DeviceRole.PHONE, 'Phone'),
     (DeviceRole.CAMERA, 'Camera'),
     (DeviceRole.CLOUD, 'Cloud'),
+    (DeviceRole.CLOUD2, 'Cloud 2'),
+    (DeviceRole.CLOUD3, 'Cloud 3'),
+    (DeviceRole.CLOUD4, 'Cloud 4'),
+    (DeviceRole.INTERNET, 'Internet'),
     (DeviceRole.UNKNOWN, 'Unknown'),
 ]
 
@@ -175,9 +182,10 @@ class DevicePaletteButton(QToolButton):
 class TopologyTab(QWidget):
     """Ribbon-style controls over the interactive topology canvas."""
 
-    def __init__(self, config_manager, parent=None):
+    def __init__(self, config_manager, parent=None, main_window=None):
         super().__init__(parent)
         self._config = config_manager
+        self._main = main_window
         self._worker = None
         self._monitor = None
         self._graph = None
@@ -191,9 +199,11 @@ class TopologyTab(QWidget):
         root.setSpacing(0)
 
         self.view = TopologyView()
-        self.view.set_layout_path(default_layout_path())
+        self.view.set_layout_path(default_map_path())
         self.view._scene.node_double_clicked.connect(self._on_node_double_clicked)
         self.view._scene.group_clicked.connect(self._on_group_clicked)
+        self.view._scene.node_context_menu_requested.connect(self._on_node_context_menu)
+        self.view._scene.group_context_menu_requested.connect(self._on_group_context_menu)
 
         root.addWidget(self._build_ribbon_tabs())
         self.ribbon_stack = QStackedWidget()
@@ -208,6 +218,9 @@ class TopologyTab(QWidget):
         root.addWidget(body)
         root.addWidget(self.view, 1)
 
+        if self.view.load_saved_map():
+            self._graph = self.view._scene.graph
+            self._rebuild_level_filters(self._graph)
         self._load_remembered()
         QApplication.instance().aboutToQuit.connect(self.shutdown)
 
@@ -222,7 +235,7 @@ class TopologyTab(QWidget):
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
         self.ribbon_btns: dict[int, QPushButton] = {}
-        for index, label in enumerate(('Discovery', 'Dispositivos', 'Settings')):
+        for index, label in enumerate(('Discovery', 'Objects', 'Settings')):
             btn = QPushButton(label)
             btn.setObjectName('ribbonTab')
             btn.setCheckable(True)
@@ -336,12 +349,21 @@ class TopologyTab(QWidget):
         hint = QLabel('Drag a device onto the map to add it manually.')
         hint.setStyleSheet('color: #8B949E;')
         layout.addWidget(hint)
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet('QScrollArea { background: transparent; }')
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
         for role, label in _PALETTE:
-            row.addWidget(DevicePaletteButton(role, label))
-        row.addStretch(1)
-        layout.addLayout(row)
+            row_layout.addWidget(DevicePaletteButton(role, label))
+        row_layout.addStretch(1)
+        scroll.setWidget(row)
+        layout.addWidget(scroll)
         return page
 
     # ── Settings page ────────────────────────────────────────────────────
@@ -356,12 +378,31 @@ class TopologyTab(QWidget):
         export_btn = QPushButton('Export PNG')
         export_btn.clicked.connect(self._export_png)
         row.addWidget(export_btn)
-        save_btn = QPushButton('Save Layout')
-        save_btn.clicked.connect(self.view.save_layout)
+        save_btn = QPushButton('Save Map')
+        save_btn.clicked.connect(self._save_map)
         row.addWidget(save_btn)
+        self.save_feedback = QLabel('')
+        self.save_feedback.setStyleSheet('color: #3FB950; font-weight: bold;')
+        row.addWidget(self.save_feedback)
         row.addStretch(1)
         layout.addLayout(row)
+
+        self._save_feedback_timer = QTimer(self)
+        self._save_feedback_timer.setSingleShot(True)
+        self._save_feedback_timer.setInterval(2500)
+        self._save_feedback_timer.timeout.connect(self._clear_save_feedback)
         return page
+
+    def _save_map(self) -> None:
+        """Save the full map and show transient visual confirmation."""
+        self.view.save_map()
+        path = self.view.layout_path or ''
+        name = os.path.basename(path) if path else ''
+        self.save_feedback.setText(f'✓ Map saved{f" to {name}" if name else ""}')
+        self._save_feedback_timer.start()
+
+    def _clear_save_feedback(self) -> None:
+        self.save_feedback.setText('')
 
     def _export_png(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -480,10 +521,22 @@ class TopologyTab(QWidget):
         self.view.set_visible_levels(active)
 
     def _on_node_double_clicked(self, device) -> None:
-        DeviceDetailDialog(device, self).show()
+        dialog = DeviceDetailDialog(device, self)
+        dialog.device_changed.connect(self.view.on_device_changed)
+        dialog.show()
 
     def _on_group_clicked(self, group) -> None:
         GroupDevicesDialog(group.members(), self).show()
+
+    def _on_node_context_menu(self, device, pos) -> None:
+        if self._main is None:
+            return
+        TopologyActions.show_node_menu(self._main, device, pos)
+
+    def _on_group_context_menu(self, group, pos) -> None:
+        if self._main is None:
+            return
+        TopologyActions.show_group_menu(self._main, group, pos)
 
     def _show_community_menu(self) -> None:
         history = self._config.get_vuln_community_history()

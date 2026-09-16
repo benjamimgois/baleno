@@ -28,6 +28,7 @@ from cetuslib.topology.models import (
 from cetuslib.topology.engine import TopologyEngine, normalize_port
 from cetuslib.topology.persistence import (
     apply_layout, load_layout, load_group_layout, save_layout, default_layout_path,
+    save_map, load_map, default_map_path,
 )
 
 __all__ = ['TopologyView', 'TopologyScene', 'NodeItem', 'EdgeItem',
@@ -61,7 +62,12 @@ ROLE_COLOR = {
     DeviceRole.AP: QColor(63, 185, 80),
     DeviceRole.CAMERA: QColor(210, 153, 34),
     DeviceRole.CLOUD: QColor(88, 166, 255),
+    DeviceRole.CLOUD2: QColor(88, 166, 255),
+    DeviceRole.CLOUD3: QColor(88, 166, 255),
+    DeviceRole.CLOUD4: QColor(88, 166, 255),
+    DeviceRole.INTERNET: QColor(88, 166, 255),
     DeviceRole.HOST: QColor(201, 209, 217),
+    DeviceRole.PHONE: QColor(201, 209, 217),
     DeviceRole.UNKNOWN: QColor(139, 148, 158),
 }
 
@@ -75,8 +81,13 @@ ROLE_ICON = {
     DeviceRole.SERVER: 'server.svg',
     DeviceRole.AP: 'wifi.svg',
     DeviceRole.CAMERA: 'camera.svg',
-    DeviceRole.CLOUD: 'internet.svg',
+    DeviceRole.CLOUD: 'cloud.svg',
+    DeviceRole.CLOUD2: 'cloud2.svg',
+    DeviceRole.CLOUD3: 'cloud3.svg',
+    DeviceRole.CLOUD4: 'cloud4.svg',
+    DeviceRole.INTERNET: 'internet.svg',
     DeviceRole.HOST: 'pc.svg',
+    DeviceRole.PHONE: 'phone.svg',
     DeviceRole.UNKNOWN: 'unknown.svg',
 }
 
@@ -219,6 +230,8 @@ class NodeItem(QGraphicsObject):
     HEIGHT = 112.0
     moved = pyqtSignal(object)
     double_clicked = pyqtSignal(object)
+    remove_requested = pyqtSignal(object)
+    context_menu_requested = pyqtSignal(object, object)
 
     def __init__(self, device: Device):
         super().__init__()
@@ -264,6 +277,9 @@ class NodeItem(QGraphicsObject):
     def mouseDoubleClickEvent(self, event) -> None:
         self.double_clicked.emit(self.device)
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        self.context_menu_requested.emit(self.device, event.screenPos())
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.save()
@@ -440,6 +456,7 @@ class GroupNodeItem(QGraphicsObject):
     MIN_GAP = 80.0          # minimum vertical gap below the parent level-1 node
     clicked = pyqtSignal(object)   # emits the GroupNodeItem
     moved = pyqtSignal(object)     # emits the GroupNodeItem
+    context_menu_requested = pyqtSignal(object, object)   # (group, screen_pos)
 
     def __init__(self, parent_id: str, member_ids: list[str], graph: TopologyGraph,
                  parent_node: Optional[NodeItem] = None):
@@ -502,6 +519,9 @@ class GroupNodeItem(QGraphicsObject):
         self.clicked.emit(self)
         super().mousePressEvent(event)
 
+    def contextMenuEvent(self, event) -> None:
+        self.context_menu_requested.emit(self, event.screenPos())
+
 
 class GroupLinkItem(QGraphicsPathItem):
     """A dashed line from a level-1 parent to a collapsed group node."""
@@ -527,6 +547,9 @@ class TopologyScene(QGraphicsScene):
 
     node_double_clicked = pyqtSignal(object)
     group_clicked = pyqtSignal(object)
+    node_removed = pyqtSignal(object)
+    node_context_menu_requested = pyqtSignal(object, object)
+    group_context_menu_requested = pyqtSignal(object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -568,6 +591,8 @@ class TopologyScene(QGraphicsScene):
                 continue
             node = NodeItem(device)
             node.double_clicked.connect(self.node_double_clicked)
+            node.remove_requested.connect(self._on_remove_requested)
+            node.context_menu_requested.connect(self.node_context_menu_requested)
             self.addItem(node)
             self.node_items[device_id] = node
 
@@ -576,6 +601,7 @@ class TopologyScene(QGraphicsScene):
             gnode = GroupNodeItem(parent_id, member_ids, graph,
                                   parent_node=self.node_items.get(parent_id))
             gnode.clicked.connect(self.group_clicked)
+            gnode.context_menu_requested.connect(self.group_context_menu_requested)
             self.addItem(gnode)
             self.group_items[parent_id] = gnode
 
@@ -674,6 +700,8 @@ class TopologyScene(QGraphicsScene):
         node = NodeItem(device)
         node.setPos(pos)
         node.double_clicked.connect(self.node_double_clicked)
+        node.remove_requested.connect(self._on_remove_requested)
+        node.context_menu_requested.connect(self.node_context_menu_requested)
         self.addItem(node)
         self.node_items[device.id] = node
         return node
@@ -686,12 +714,118 @@ class TopologyScene(QGraphicsScene):
         return self._add_node(device, pos)
 
     def add_manual_device(self, role: DeviceRole, pos: QPointF) -> Device:
-        """Add a manually-placed device node (from the palette) at ``pos``."""
+        """Add a manually-placed device node (from the palette) at ``pos``.
+
+        The device is registered in ``self.graph.devices`` so the persisted
+        map carries manual objects too (design D2).
+        """
+        if self.graph is None:
+            self.graph = TopologyGraph()
         self._manual_counter += 1
         device = Device(id=f'manual-{self._manual_counter}', role=role,
                         status='unknown', layer=1)
+        self.graph.devices[device.id] = device
         self._add_node(device, pos)
         return device
+
+    def _on_remove_requested(self, device: Device) -> None:
+        if self.remove_node(device.id):
+            self.node_removed.emit(device.id)
+
+    def _remove_edge_item(self, edge: EdgeItem) -> None:
+        for node in (edge.source, edge.target):
+            if edge in node.edges:
+                node.edges.remove(edge)
+        if edge in self.edge_items:
+            self.edge_items.remove(edge)
+        self.removeItem(edge)
+
+    def remove_node(self, device_id: str) -> bool:
+        """Remove a node item, its device and any touching links from the graph.
+
+        Returns True if a node was actually removed.
+        """
+        node = self.node_items.pop(device_id, None)
+        if node is None:
+            return False
+        for edge in list(node.edges):
+            self._remove_edge_item(edge)
+        # drop group link anchored on this node, and the group itself if the
+        # removed node was its parent.
+        for glink in list(self.group_links):
+            if glink.source is node:
+                self.group_links.remove(glink)
+                self.removeItem(glink)
+        gnode = self.group_items.pop(device_id, None)
+        if gnode is not None:
+            for glink in list(self.group_links):
+                if glink.target is gnode:
+                    self.group_links.remove(glink)
+                    self.removeItem(glink)
+            self.removeItem(gnode)
+        self.clusters.pop(device_id, None)
+        for members in self.clusters.values():
+            if device_id in members:
+                members.remove(device_id)
+        self.removeItem(node)
+        if self.graph is not None:
+            self.graph.devices.pop(device_id, None)
+            self.graph.links = [l for l in self.graph.links
+                                if not l.touches(device_id)]
+        return True
+
+    def _derive_manual_counter(self) -> None:
+        """Derive ``_manual_counter`` from the highest ``manual-N`` id present,
+        so manually added devices do not collide after reload."""
+        max_n = 0
+        ids = self.graph.devices if self.graph is not None else {}
+        for did in ids:
+            if did.startswith('manual-'):
+                try:
+                    max_n = max(max_n, int(did[len('manual-'):]))
+                except ValueError:
+                    continue
+        self._manual_counter = max_n
+
+    def set_graph_from_persisted(
+            self, graph: TopologyGraph,
+            positions: dict[str, tuple[float, float]] | None = None,
+            group_positions: dict[str, tuple[float, float]] | None = None) -> None:
+        """Populate the scene from a persisted map, using saved coordinates as
+        authoritative (no TopologyEngine auto-layout, no grouping)."""
+        self.clear()
+        self.node_items = {}
+        self.edge_items = []
+        self.group_items = {}
+        self.group_links = []
+        self.graph = graph
+        self.clusters = {}
+
+        for device_id, device in graph.devices.items():
+            node = NodeItem(device)
+            node.double_clicked.connect(self.node_double_clicked)
+            node.remove_requested.connect(self._on_remove_requested)
+            node.context_menu_requested.connect(self.node_context_menu_requested)
+            self.addItem(node)
+            self.node_items[device_id] = node
+
+        seen: dict[frozenset, int] = {}
+        for link in graph.links:
+            key = frozenset((link.source_id, link.target_id))
+            offset = seen.get(key, 0)
+            seen[key] = offset + 1 if link.lag else 0
+            src = self.node_items.get(link.source_id)
+            dst = self.node_items.get(link.target_id)
+            if src and dst:
+                edge = EdgeItem(link, src, dst, offset=offset if link.lag else 0)
+                self.edge_items.append(edge)
+                self.addItem(edge)
+
+        for device_id, node in self.node_items.items():
+            xy = (positions or {}).get(device_id)
+            if xy is not None:
+                node.setPos(xy[0], xy[1])
+        self._derive_manual_counter()
 
 
 class Minimap(QGraphicsView):
@@ -751,7 +885,8 @@ class TopologyView(QGraphicsView):
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(800)
-        self._save_timer.timeout.connect(self.save_layout)
+        self._save_timer.timeout.connect(self.save_map)
+        self._scene.node_removed.connect(self._schedule_save)
 
     def set_layout_path(self, path: str) -> None:
         """Enable/change automatic persistence of manual node positions."""
@@ -772,6 +907,44 @@ class TopologyView(QGraphicsView):
         graph = self._scene.graph if self._scene.graph is not None else TopologyGraph()
         save_layout(graph, self.current_positions(), self.layout_path,
                     group_positions=self.current_group_positions())
+
+    def save_map(self) -> None:
+        """Write the whole map (graph + positions + groups) to ``layout_path``
+        (if set), in the v3 ``topology_map.json`` format."""
+        if not self.layout_path:
+            return
+        graph = self._scene.graph if self._scene.graph is not None else TopologyGraph()
+        save_map(graph, self.current_positions(), self.layout_path,
+                 group_positions=self.current_group_positions())
+
+    def remove_node(self, device: Device) -> None:
+        """Remove a device node from the canvas and schedule an auto-save."""
+        if self._scene.remove_node(device.id):
+            self._schedule_save()
+
+    def on_device_changed(self, device: Device) -> None:
+        """Handle an edited device: repaint its node and schedule a save."""
+        node = self._scene.node_items.get(device.id)
+        if node is not None:
+            node.refresh_tooltip()
+            node.update()
+        self._schedule_save()
+
+    def load_saved_map(self) -> bool:
+        """Load the persisted topology map (if any) into the scene.
+
+        Returns True when a non-empty map was restored.  Missing/corrupt files
+        leave the tab empty (returns False) without raising.
+        """
+        path = self.layout_path or default_map_path()
+        graph, positions, groups = load_map(path)
+        if not graph.devices:
+            return False
+        self._scene.set_graph_from_persisted(graph, positions, groups)
+        for item in self._scene.node_items.values():
+            item.moved.connect(self._schedule_save)
+        self.fit_in_view()
+        return True
 
     def _schedule_save(self, *args) -> None:
         if self.layout_path:
@@ -842,6 +1015,7 @@ class TopologyView(QGraphicsView):
         """Add a manually-placed device (from the palette) and wire its save."""
         device = self._scene.add_manual_device(role, pos)
         self._scene.node_items[device.id].moved.connect(self._schedule_save)
+        self._schedule_save()
         return device
 
     def add_device_node(self, device: Device, pos: QPointF) -> None:
@@ -858,6 +1032,19 @@ class TopologyView(QGraphicsView):
         self._scene.group_links = []
         self._scene.graph = None
         self._scene.clusters = {}
+        self._scene._manual_counter = 0
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            removed = False
+            for item in self._scene.selectedItems():
+                if isinstance(item, NodeItem):
+                    if self._scene.remove_node(item.device.id):
+                        removed = True
+            if removed:
+                self._schedule_save()
+            return
+        super().keyPressEvent(event)
 
     # ── drag-and-drop (device palette → canvas) ──────────────────────────
 
