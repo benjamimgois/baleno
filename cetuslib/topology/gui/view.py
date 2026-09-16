@@ -14,12 +14,13 @@ from typing import Optional
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPolygonF,
+    QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPainterPathStroker,
+    QPen, QPolygonF,
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
-    QGraphicsView,
+    QGraphicsView, QLabel, QMenu,
 )
 
 from cetuslib.topology.models import (
@@ -52,13 +53,27 @@ ACCENT = QColor(88, 166, 255)    # #58A6FF
 EDGE = QColor(139, 148, 158)
 GRID_LINE = QColor(30, 36, 44)   # very faint grid, barely lighter than BG
 
-# ── link state styling ────────────────────────────────────────────────────
-# State follows interface oper_status only: both interfaces up → active
-# (dashed, animated); any interface down → offline (solid red).
-ACTIVE_COLOR = UP                # alive link (green): both interfaces up
+# ── link styling ──────────────────────────────────────────────────────────
+# Style reflects interface oper_status (up = dashed/animated, down = solid
+# red); colour reflects the link's operating speed.
+ACTIVE_COLOR = UP                # 10 Gbps+ (green)
 DOWN_COLOR = DOWN                # offline link (red): interface down
+SPEED_1G_COLOR = ACCENT          # 1 Gbps – <10 Gbps (light blue)
+SPEED_LOW_COLOR = QColor(230, 126, 34)   # <1 Gbps incl. 100 Mbps (orange)
+SPEED_UNKNOWN_COLOR = EDGE       # unknown speed (gray)
 DASH_PATTERN = [6, 4]            # marching-ants dash pattern for active links
 DASH_PERIOD = sum(DASH_PATTERN)
+
+
+def speed_color(mbps: float) -> QColor:
+    """Map an interface speed (Mbps) to its link colour."""
+    if mbps >= 10000:
+        return ACTIVE_COLOR
+    if mbps >= 1000:
+        return SPEED_1G_COLOR
+    if mbps > 0:
+        return SPEED_LOW_COLOR
+    return SPEED_UNKNOWN_COLOR
 
 ROLE_COLOR = {
     DeviceRole.CORE: QColor(88, 166, 255),
@@ -372,7 +387,12 @@ class EdgeItem(QGraphicsPathItem):
     Styling follows interface oper_status only:
     * ``active``  — both interfaces up, dashed and animated (marching ants)
     * ``offline`` — any interface down, solid red
+
+    A manual override (``PortLink.override_status`` / ``override_speed``) takes
+    priority over the automatic detection.
     """
+
+    HIT_WIDTH = 10.0
 
     def __init__(self, link: PortLink, source: NodeItem, target: NodeItem, offset: int = 0):
         super().__init__()
@@ -389,25 +409,46 @@ class EdgeItem(QGraphicsPathItem):
         self.update_path()
         self.refresh_state()
 
+    def shape(self) -> QPainterPath:
+        """Widen the hit area so the thin line is easy to right-click."""
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.HIT_WIDTH)
+        return stroker.createStroke(self.path())
+
+    def contextMenuEvent(self, event) -> None:
+        emit = getattr(self.scene(), 'edge_context_menu_requested', None)
+        if emit is not None:
+            emit.emit(self, event.screenPos())
+        event.accept()
+
     def source_interface(self) -> Optional[Interface]:
-        """Resolve the source-side interface for this link (by ifIndex/name)."""
+        """Resolve the source-side interface for this link.
+
+        Prefers matching by port name (lldpLocPortId vs ifName) because the
+        LLDP local-port number stored in ``source_ifindex`` is not guaranteed
+        to equal the ifIndex on every vendor.  Falls back to ifIndex only when
+        the name does not resolve.
+        """
         device = self.source.device
+        port = (self.link.source_port or '').strip()
+        if port:
+            key = normalize_port(port)
+            for iface in device.interfaces.values():
+                if iface.name and normalize_port(iface.name) == key:
+                    return iface
         if self.link.source_ifindex:
-            iface = device.interfaces.get(self.link.source_ifindex)
-            if iface is not None:
-                return iface
-        key = normalize_port(self.link.source_port)
-        for iface in device.interfaces.values():
-            if normalize_port(iface.name) == key:
-                return iface
+            return device.interfaces.get(self.link.source_ifindex)
         return None
 
     def target_interface(self) -> Optional[Interface]:
         """Resolve the target-side interface (by port name — no ifIndex stored)."""
         device = self.target.device
-        key = normalize_port(self.link.target_port)
+        port = (self.link.target_port or '').strip()
+        if not port:
+            return None
+        key = normalize_port(port)
         for iface in device.interfaces.values():
-            if normalize_port(iface.name) == key:
+            if iface.name and normalize_port(iface.name) == key:
                 return iface
         return None
 
@@ -415,13 +456,31 @@ class EdgeItem(QGraphicsPathItem):
     def _iface_down(iface: Optional[Interface]) -> bool:
         return iface is not None and iface.oper_status == 'down'
 
-    def refresh_state(self) -> None:
-        """Recompute the link state from the two endpoints' oper_status.
+    def link_speed(self) -> float:
+        """Operating speed of the link.
 
-        Any endpoint down → offline; otherwise (up, unknown or unresolved)
-        → active.  Traffic is intentionally ignored.
+        A manual ``override_speed`` wins; otherwise the slower of the two
+        interfaces is used.
         """
-        if self._iface_down(self.source_interface()) or self._iface_down(self.target_interface()):
+        if self.link.override_speed is not None:
+            return self.link.override_speed
+        si = self.source_interface()
+        ti = self.target_interface()
+        speeds = [i.speed_mbps for i in (si, ti) if i is not None and i.speed_mbps > 0]
+        return min(speeds) if speeds else 0.0
+
+    def refresh_state(self) -> None:
+        """Recompute the link state.
+
+        A manual ``override_status`` wins; otherwise the two endpoints'
+        oper_status decide (any down → offline, else active).  Traffic is
+        intentionally ignored.
+        """
+        if self.link.override_status == 'down':
+            self.state = 'down'
+        elif self.link.override_status == 'up':
+            self.state = 'active'
+        elif self._iface_down(self.source_interface()) or self._iface_down(self.target_interface()):
             self.state = 'down'
         else:
             self.state = 'active'
@@ -429,7 +488,7 @@ class EdgeItem(QGraphicsPathItem):
     def _pen(self) -> QPen:
         if self.state == 'down':
             return QPen(DOWN_COLOR, 2.5)
-        pen = QPen(ACTIVE_COLOR, 2.0)
+        pen = QPen(speed_color(self.link_speed()), 2.0)
         pen.setDashPattern(DASH_PATTERN)
         pen.setDashOffset(self._dash_offset)
         return pen
@@ -484,6 +543,17 @@ class EdgeItem(QGraphicsPathItem):
             painter.drawRoundedRect(QRectF(mid.x() - tw / 2 - 4, mid.y() - 8, tw + 8, 14), 3, 3)
             painter.setPen(TEXT_DIM)
             painter.drawText(QPointF(mid.x() - tw / 2, mid.y() + 3), label)
+
+        if self.link.overridden:
+            lx = mid.x() - tw / 2 - 12
+            ly = mid.y() - 3
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(ACCENT)
+            painter.drawEllipse(QPointF(lx, ly), 6, 6)
+            painter.setPen(QColor('#0D1117'))
+            painter.setFont(QFont('Sans', 6, QFont.Weight.Bold))
+            painter.drawText(QRectF(lx - 6, ly - 6, 12, 12),
+                             Qt.AlignmentFlag.AlignCenter, 'M')
 
 
 class GroupNodeItem(QGraphicsObject):
@@ -592,6 +662,7 @@ class TopologyScene(QGraphicsScene):
     node_removed = pyqtSignal(object)
     node_context_menu_requested = pyqtSignal(object, object)
     group_context_menu_requested = pyqtSignal(object, object)
+    edge_context_menu_requested = pyqtSignal(object, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -922,6 +993,18 @@ class TopologyView(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
         self._zoom = 1.0
         self.minimap = Minimap(self)
+        self._legend = QLabel(self)
+        self._legend.setTextFormat(Qt.TextFormat.RichText)
+        self._legend.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._legend.setText(
+            '<span style="background-color:#0D1117; color:#C9D1D9; '
+            'padding:5px 8px; border:1px solid #30363d; border-radius:4px;">'
+            '<span style="color:#3FB950;">●</span> 10G+ &nbsp;&nbsp;'
+            '<span style="color:#58A6FF;">●</span> 1G &nbsp;&nbsp;'
+            '<span style="color:#E67E22;">●</span> &lt;1G &nbsp;&nbsp;'
+            '<span style="color:#8B949E;">●</span> ? &nbsp;&nbsp;'
+            '<span style="color:#F85149;">━</span> down</span>')
+        self._legend.adjustSize()
         self.layout_path = ''
         self.setAcceptDrops(True)
         self._save_timer = QTimer(self)
@@ -929,6 +1012,7 @@ class TopologyView(QGraphicsView):
         self._save_timer.setInterval(800)
         self._save_timer.timeout.connect(self.save_map)
         self._scene.node_removed.connect(self._schedule_save)
+        self._scene.edge_context_menu_requested.connect(self._on_edge_context_menu)
         self._dash_phase = 0.0
         self._anim_timer = QTimer(self)
         self._anim_timer.setInterval(40)
@@ -942,6 +1026,56 @@ class TopologyView(QGraphicsView):
             if edge.state == 'active' and edge.isVisible():
                 edge._dash_offset = self._dash_phase
                 edge.update()
+
+    def _on_edge_context_menu(self, edge: EdgeItem, pos) -> None:
+        """Show the manual state/speed override menu for a link."""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            'QMenu { background-color:#161B22; border:1px solid #30363D; color:#C9D1D9; }'
+            'QMenu::item { padding:6px 22px 6px 14px; }'
+            'QMenu::item:selected { background-color:#4169E1; color:#ffffff; }'
+            'QMenu::separator { height:1px; background:#30363D; margin:4px 8px; }')
+
+        state_menu = menu.addMenu('Estado')
+        s_auto = state_menu.addAction('Auto')
+        s_up = state_menu.addAction('Up')
+        s_down = state_menu.addAction('Down')
+        for act, val in ((s_auto, None), (s_up, 'up'), (s_down, 'down')):
+            act.setCheckable(True)
+            act.setChecked(edge.link.override_status == val)
+
+        speed_menu = menu.addMenu('Velocidade')
+        v_auto = speed_menu.addAction('Auto')
+        v_auto.setCheckable(True)
+        v_auto.setChecked(edge.link.override_speed is None)
+        speed_opts = [('10 Mbps', 10.0), ('100 Mbps', 100.0),
+                      ('1 Gbps', 1000.0), ('10 Gbps', 10000.0)]
+        v_acts: list[tuple] = []
+        for lbl, mbps in speed_opts:
+            act = speed_menu.addAction(lbl)
+            act.setCheckable(True)
+            act.setChecked(edge.link.override_speed == mbps)
+            v_acts.append((act, mbps))
+
+        chosen = menu.exec(pos)
+        if chosen is None:
+            return
+        if chosen is s_auto:
+            edge.link.override_status = None
+        elif chosen is s_up:
+            edge.link.override_status = 'up'
+        elif chosen is s_down:
+            edge.link.override_status = 'down'
+        elif chosen is v_auto:
+            edge.link.override_speed = None
+        else:
+            for act, mbps in v_acts:
+                if chosen is act:
+                    edge.link.override_speed = mbps
+                    break
+        edge.refresh_state()
+        edge.update()
+        self._schedule_save()
 
     def set_layout_path(self, path: str) -> None:
         """Enable/change automatic persistence of manual node positions."""
@@ -1008,6 +1142,11 @@ class TopologyView(QGraphicsView):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._place_minimap()
+        self._place_legend()
+
+    def _place_legend(self) -> None:
+        self._legend.move(10, self.height() - self._legend.height() - 10)
+        self._legend.raise_()
 
     def _place_minimap(self) -> None:
         self.minimap.move(self.width() - self.minimap.width() - 10,
@@ -1178,6 +1317,27 @@ class TopologyView(QGraphicsView):
 
         for edge in self._scene.edge_items:
             edge.refresh_state()
+
+    def update_speeds(self, data: dict) -> None:
+        """Apply live interface speeds (ifHighSpeed) and refresh edges.
+
+        ``data`` is ``{device_id: {ifindex: float Mbps}}``.
+        """
+        for device_id, speeds in data.items():
+            device = None
+            node = self._scene.node_items.get(device_id)
+            if node is not None:
+                device = node.device
+            elif self._scene.graph is not None:
+                device = self._scene.graph.devices.get(device_id)
+            if device is None:
+                continue
+            for idx, mbps in speeds.items():
+                iface = device.interfaces.get(idx)
+                if iface is not None:
+                    iface.speed_mbps = mbps
+        for edge in self._scene.edge_items:
+            edge.update()
 
     def update_statuses(self, data: dict) -> None:
         """Apply live interface oper-status (ifOperStatus) and refresh edges.

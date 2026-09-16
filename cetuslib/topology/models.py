@@ -148,6 +148,8 @@ class PortLink:
     lag: bool = False                # bundled into a LAG (multiple parallel links)
     weight: int = 1
     status: str = 'up'
+    override_status: Optional[str] = None   # None=auto | 'up' | 'down'
+    override_speed: Optional[float] = None  # None=auto | Mbps
 
     def key(self) -> tuple:
         """Order-independent key for deduplication."""
@@ -157,6 +159,11 @@ class PortLink:
 
     def touches(self, device_id: str) -> bool:
         return device_id in (self.source_id, self.target_id)
+
+    @property
+    def overridden(self) -> bool:
+        """True when any manual override is active."""
+        return self.override_status is not None or self.override_speed is not None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -168,6 +175,8 @@ class PortLink:
             'lag': self.lag,
             'weight': self.weight,
             'status': self.status,
+            'override_status': self.override_status,
+            'override_speed': self.override_speed,
         }
 
     @classmethod
@@ -181,6 +190,9 @@ class PortLink:
             lag=bool(data.get('lag', False)),
             weight=int(data.get('weight', 1) or 1),
             status=str(data.get('status', 'up') or 'up'),
+            override_status=data.get('override_status') or None,
+            override_speed=(float(data.get('override_speed'))
+                            if data.get('override_speed') is not None else None),
         )
 
 

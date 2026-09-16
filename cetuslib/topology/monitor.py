@@ -29,6 +29,8 @@ class TrafficMonitor(QThread):
     updated = pyqtSignal(dict)
     # {device_id: {ifindex: 'up'|'down'|'unknown'}}
     status_updated = pyqtSignal(dict)
+    # {device_id: {ifindex: float Mbps}}
+    speed_updated = pyqtSignal(dict)
 
     def __init__(self, devices: list[Device], credentials: SnmpCredentials,
                  interval: float = 5.0, communities: Optional[list[str]] = None,
@@ -72,6 +74,7 @@ class TrafficMonitor(QThread):
             return
         self._last_status_refresh = now
         statuses: dict[str, dict[int, str]] = {}
+        speeds: dict[str, dict[int, float]] = {}
         for device in self.devices:
             if self._stop:
                 return
@@ -80,8 +83,13 @@ class TrafficMonitor(QThread):
             result = self._poll_status(device)
             if result:
                 statuses[device.id] = result
+            speed = self._poll_speed(device)
+            if speed:
+                speeds[device.id] = speed
         if statuses:
             self.status_updated.emit(statuses)
+        if speeds:
+            self.speed_updated.emit(speeds)
 
     def _poll_status(self, device: Device) -> dict[int, str]:
         creds = self.credentials
@@ -95,6 +103,21 @@ class TrafficMonitor(QThread):
             return {}
         try:
             return LldpCollector(creds).poll_status(device.ip)
+        except Exception:
+            return {}
+
+    def _poll_speed(self, device: Device) -> dict[int, float]:
+        creds = self.credentials
+        if creds.version in ('1', '2c') and self.communities:
+            for community in self._ordered_communities(device.ip):
+                try:
+                    return LldpCollector(
+                        replace(creds, community=community)).poll_speed(device.ip)
+                except Exception:
+                    continue
+            return {}
+        try:
+            return LldpCollector(creds).poll_speed(device.ip)
         except Exception:
             return {}
 

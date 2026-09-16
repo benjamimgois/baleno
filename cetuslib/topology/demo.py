@@ -51,19 +51,29 @@ def synthetic_graph() -> TopologyGraph:
         id='PC-02', ip='10.0.2.31', hostname='pc-02', role=DeviceRole.HOST,
         status='down', latency_ms=0.0)
 
-    # Synthetic interfaces so the link states render in the demo:
-    #   active  (both up) → core ⟷ dist, dist ⟷ acc, acc ⟷ server/ap
-    #   offline (down)    → core ⟷ router (router ether1 is down)
+    # Synthetic interfaces so the link states/speeds render in the demo:
+    #   green  (10G) → core ⟷ dist
+    #   blue   (1G)  → dist ⟷ acc
+    #   orange (100M)→ acc ⟷ server / ap
+    #   red    (down)→ core ⟷ router (router ether1 is down)
     core.interfaces[1] = Interface(index=1, name='Te1/1/1', oper_status='up',
+                                   speed_mbps=10000,
                                    in_rate_bps=45e6, out_rate_bps=12e6)
-    core.interfaces[24] = Interface(index=24, name='Te1/0/24', oper_status='up')
+    core.interfaces[24] = Interface(index=24, name='Te1/0/24', oper_status='up',
+                                    speed_mbps=10000)
     dist.interfaces[48] = Interface(index=48, name='Te1/0/48', oper_status='up',
+                                    speed_mbps=10000,
                                     in_rate_bps=12e6, out_rate_bps=45e6)
-    dist.interfaces[2] = Interface(index=2, name='Gi1/0/1', oper_status='up')
-    acc.interfaces[1] = Interface(index=1, name='Gi0/1', oper_status='up')
-    acc.interfaces[10] = Interface(index=10, name='Gi0/10', oper_status='up')
-    acc.interfaces[11] = Interface(index=11, name='Gi0/11', oper_status='up')
-    router.interfaces[1] = Interface(index=1, name='ether1', oper_status='down')
+    dist.interfaces[2] = Interface(index=2, name='Gi1/0/1', oper_status='up',
+                                   speed_mbps=1000)
+    acc.interfaces[1] = Interface(index=1, name='Gi0/1', oper_status='up',
+                                  speed_mbps=1000)
+    acc.interfaces[10] = Interface(index=10, name='Gi0/10', oper_status='up',
+                                   speed_mbps=100)
+    acc.interfaces[11] = Interface(index=11, name='Gi0/11', oper_status='up',
+                                   speed_mbps=100)
+    router.interfaces[1] = Interface(index=1, name='ether1', oper_status='down',
+                                     speed_mbps=1000)
 
     # LLDP adjacencies — each side advertises the other, ports labelled both ends.
     core.lldp_neighbors.append(LldpNeighbor(

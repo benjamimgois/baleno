@@ -241,6 +241,50 @@ class LldpCollector:
             engine.close_dispatcher()
         return statuses
 
+    def poll_speed(self, host: str) -> dict[int, float]:
+        """Synchronous light poll: interface speed (ifHighSpeed, ifSpeed fallback)."""
+        import asyncio
+        return asyncio.run(self.poll_speed_async(host))
+
+    async def poll_speed_async(self, host: str) -> dict[int, float]:
+        """Return ``{ifIndex: Mbps}`` for one host.
+
+        Prefers ifHighSpeed (Mbps); falls back to ifSpeed (bps / 1e6) when the
+        high-speed column is absent (older agents without ifXTable).
+        """
+        from pysnmp.hlapi.v3arch.asyncio import SnmpEngine, UdpTransportTarget
+        engine = SnmpEngine()
+        speeds: dict[int, float] = {}
+        try:
+            target = await UdpTransportTarget.create(
+                (host, self.port), timeout=self.timeout, retries=self.retries)
+            auth = self._auth_data()
+            rows = await self._walk(engine, auth, target, OID_IF_HIGH_SPEED)
+            base = OID_IF_HIGH_SPEED
+            if not rows:
+                rows = await self._walk(engine, auth, target, OID_IF_SPEED)
+                base = OID_IF_SPEED
+            for oid, val in rows:
+                try:
+                    idx = int(_oid_suffix(oid, base)[-1])
+                except (IndexError, ValueError):
+                    continue
+                try:
+                    speed = float(val)
+                except ValueError:
+                    continue
+                if base == OID_IF_HIGH_SPEED:
+                    speeds[idx] = speed
+                elif speed < 2 ** 31:
+                    # ifSpeed is a 32-bit counter; anything near/above 2^31 is a
+                    # wrapped (or sentinel) value from a >1G link — untrustworthy.
+                    speeds[idx] = speed / 1e6
+        except Exception:
+            pass
+        finally:
+            engine.close_dispatcher()
+        return speeds
+
     async def poll_async(self, host: str) -> dict:
         from pysnmp.hlapi.v3arch.asyncio import (
             SnmpEngine, UdpTransportTarget,

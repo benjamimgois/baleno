@@ -623,6 +623,7 @@ class TopologyTab(QWidget):
         )
         self._monitor.updated.connect(self.view.update_traffic)
         self._monitor.status_updated.connect(self.view.update_statuses)
+        self._monitor.speed_updated.connect(self.view.update_speeds)
         self._monitor.start()
 
     def _stop_monitor(self) -> None:
