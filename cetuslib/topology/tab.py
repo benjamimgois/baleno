@@ -475,6 +475,7 @@ class TopologyTab(QWidget):
             f'{len(graph.orphans)} orphans')
         self.discover_btn.setEnabled(True)
         self._start_monitor(graph)
+        self.view.save_map()
 
     def _on_failed(self, message: str) -> None:
         self.status_label.setText(f'Error: {message}')

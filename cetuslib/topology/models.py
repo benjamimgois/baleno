@@ -103,8 +103,18 @@ class Device:
         return self.status in ('up', 'active')
 
     def to_dict(self) -> dict[str, Any]:
-        """Identity fields only — ephemeral runtime data (interfaces, LLDP,
-        CPU/memory, rates) is intentionally excluded from persistence."""
+        """Identity fields plus a minimal interface summary (name, oper_status,
+        speed) so link state/colour survive a restart.  Ephemeral runtime data
+        (octet counters, live rates, CPU/memory, LLDP neighbours) is excluded.
+        """
+        interfaces: dict[str, dict[str, Any]] = {}
+        for idx, iface in self.interfaces.items():
+            if iface.name:
+                interfaces[str(idx)] = {
+                    'name': iface.name,
+                    'oper_status': iface.oper_status,
+                    'speed_mbps': iface.speed_mbps,
+                }
         return {
             'id': self.id,
             'ip': self.ip,
@@ -115,6 +125,7 @@ class Device:
             'chassis_id': self.chassis_id,
             'status': self.status,
             'layer': self.layer,
+            'interfaces': interfaces,
         }
 
     @classmethod
@@ -123,7 +134,7 @@ class Device:
             role = DeviceRole(data.get('role', DeviceRole.UNKNOWN.value))
         except ValueError:
             role = DeviceRole.UNKNOWN
-        return cls(
+        device = cls(
             id=str(data.get('id', '')),
             ip=str(data.get('ip', '') or ''),
             hostname=str(data.get('hostname', '') or ''),
@@ -134,6 +145,18 @@ class Device:
             status=str(data.get('status', 'unknown') or 'unknown'),
             layer=int(data.get('layer', 0) or 0),
         )
+        for idx_str, ifdata in (data.get('interfaces') or {}).items():
+            try:
+                idx = int(idx_str)
+            except (ValueError, TypeError):
+                continue
+            device.interfaces[idx] = Interface(
+                index=idx,
+                name=str(ifdata.get('name', '')),
+                oper_status=str(ifdata.get('oper_status', 'up') or 'up'),
+                speed_mbps=float(ifdata.get('speed_mbps', 0) or 0),
+            )
+        return device
 
 
 @dataclass
