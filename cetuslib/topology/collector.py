@@ -210,6 +210,37 @@ class LldpCollector:
         import asyncio
         return asyncio.run(self.poll_async(host))
 
+    def poll_status(self, host: str) -> dict[int, str]:
+        """Synchronous light poll: interface oper-status (IF-MIB ifOperStatus)."""
+        import asyncio
+        return asyncio.run(self.poll_status_async(host))
+
+    async def poll_status_async(self, host: str) -> dict[int, str]:
+        """Return ``{ifIndex: 'up'|'down'|'unknown'}`` for one host.
+
+        Lighter than :meth:`collect` — walks a single column so the live
+        topology monitor can re-check port state on a longer cadence.
+        """
+        from pysnmp.hlapi.v3arch.asyncio import SnmpEngine, UdpTransportTarget
+        engine = SnmpEngine()
+        statuses: dict[int, str] = {}
+        try:
+            target = await UdpTransportTarget.create(
+                (host, self.port), timeout=self.timeout, retries=self.retries)
+            auth = self._auth_data()
+            for oid, val in await self._walk(engine, auth, target, OID_IF_OPER_STATUS):
+                try:
+                    idx = int(_oid_suffix(oid, OID_IF_OPER_STATUS)[-1])
+                except (IndexError, ValueError):
+                    continue
+                statuses[idx] = ('up' if val == '1'
+                                 else 'down' if val == '2' else 'unknown')
+        except Exception:
+            pass
+        finally:
+            engine.close_dispatcher()
+        return statuses
+
     async def poll_async(self, host: str) -> dict:
         from pysnmp.hlapi.v3arch.asyncio import (
             SnmpEngine, UdpTransportTarget,

@@ -27,18 +27,22 @@ class TrafficMonitor(QThread):
     #              'in_bps': float, 'out_bps': float,
     #              'if_rates': {ifindex: (in_bps, out_bps)}}}
     updated = pyqtSignal(dict)
+    # {device_id: {ifindex: 'up'|'down'|'unknown'}}
+    status_updated = pyqtSignal(dict)
 
     def __init__(self, devices: list[Device], credentials: SnmpCredentials,
                  interval: float = 5.0, communities: Optional[list[str]] = None,
-                 config=None, parent=None):
+                 status_interval: float = 60.0, config=None, parent=None):
         super().__init__(parent)
         self.devices = devices
         self.credentials = credentials
         self.interval = interval
+        self.status_interval = status_interval
         self.communities = list(communities) if communities else None
         self.config = config
         self._stop = False
         self._prev: dict[str, tuple[float, dict[int, tuple[int, int]]]] = {}
+        self._last_status_refresh = 0.0
 
     def stop(self) -> None:
         self._stop = True
@@ -56,29 +60,64 @@ class TrafficMonitor(QThread):
                 if result['counters']:
                     snapshot[device.id] = result
             self._apply(snapshot)
+            self._refresh_statuses_if_due(start)
 
             remaining = self.interval - (time.monotonic() - start)
             deadline = time.monotonic() + max(0.0, remaining)
             while time.monotonic() < deadline and not self._stop:
                 time.sleep(0.1)
 
+    def _refresh_statuses_if_due(self, now: float) -> None:
+        if now - self._last_status_refresh < self.status_interval:
+            return
+        self._last_status_refresh = now
+        statuses: dict[str, dict[int, str]] = {}
+        for device in self.devices:
+            if self._stop:
+                return
+            if not device.ip or device.status != 'up':
+                continue
+            result = self._poll_status(device)
+            if result:
+                statuses[device.id] = result
+        if statuses:
+            self.status_updated.emit(statuses)
+
+    def _poll_status(self, device: Device) -> dict[int, str]:
+        creds = self.credentials
+        if creds.version in ('1', '2c') and self.communities:
+            for community in self._ordered_communities(device.ip):
+                try:
+                    return LldpCollector(
+                        replace(creds, community=community)).poll_status(device.ip)
+                except Exception:
+                    continue
+            return {}
+        try:
+            return LldpCollector(creds).poll_status(device.ip)
+        except Exception:
+            return {}
+
+    def _ordered_communities(self, ip: str) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        if self.config is not None:
+            remembered = self.config.get_snmp_ip_community(ip)
+            if remembered and remembered not in seen:
+                seen.add(remembered)
+                ordered.append(remembered)
+        for c in self.communities or []:
+            if c and c not in seen:
+                seen.add(c)
+                ordered.append(c)
+        if not ordered:
+            ordered.append('public')
+        return ordered
+
     def _poll_device(self, device: Device) -> dict:
         creds = self.credentials
         if creds.version in ('1', '2c') and self.communities:
-            ordered: list[str] = []
-            seen: set[str] = set()
-            if self.config is not None:
-                remembered = self.config.get_snmp_ip_community(device.ip)
-                if remembered and remembered not in seen:
-                    seen.add(remembered)
-                    ordered.append(remembered)
-            for c in self.communities:
-                if c and c not in seen:
-                    seen.add(c)
-                    ordered.append(c)
-            if not ordered:
-                ordered.append('public')
-            for community in ordered:
+            for community in self._ordered_communities(device.ip):
                 try:
                     result = LldpCollector(
                         replace(creds, community=community)).poll(device.ip)

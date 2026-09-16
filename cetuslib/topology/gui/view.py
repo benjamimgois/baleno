@@ -52,6 +52,14 @@ ACCENT = QColor(88, 166, 255)    # #58A6FF
 EDGE = QColor(139, 148, 158)
 GRID_LINE = QColor(30, 36, 44)   # very faint grid, barely lighter than BG
 
+# ── link state styling ────────────────────────────────────────────────────
+# State follows interface oper_status only: both interfaces up → active
+# (dashed, animated); any interface down → offline (solid red).
+ACTIVE_COLOR = UP                # alive link (green): both interfaces up
+DOWN_COLOR = DOWN                # offline link (red): interface down
+DASH_PATTERN = [6, 4]            # marching-ants dash pattern for active links
+DASH_PERIOD = sum(DASH_PATTERN)
+
 ROLE_COLOR = {
     DeviceRole.CORE: QColor(88, 166, 255),
     DeviceRole.ROUTER: QColor(210, 153, 34),
@@ -361,9 +369,9 @@ class NodeItem(QGraphicsObject):
 class EdgeItem(QGraphicsPathItem):
     """A link between two nodes, labelled with both endpoint ports.
 
-    Styling follows the endpoint levels: links between two level-1 devices are
-    green and thicker (backbone), while any link touching a level-2+ device is
-    gray and thinner.
+    Styling follows interface oper_status only:
+    * ``active``  — both interfaces up, dashed and animated (marching ants)
+    * ``offline`` — any interface down, solid red
     """
 
     def __init__(self, link: PortLink, source: NodeItem, target: NodeItem, offset: int = 0):
@@ -373,13 +381,13 @@ class EdgeItem(QGraphicsPathItem):
         self.target = target
         self.offset = offset
         self.setZValue(0)
-        if source.device.layer <= 1 and target.device.layer <= 1:
-            self.setPen(QPen(level_color(1), 2.5))
-        else:
-            self.setPen(QPen(EDGE, 1.0))
+        self.setPen(QPen(EDGE, 2.5))
+        self.state = 'active'
+        self._dash_offset = 0.0
         source.add_edge(self)
         target.add_edge(self)
         self.update_path()
+        self.refresh_state()
 
     def source_interface(self) -> Optional[Interface]:
         """Resolve the source-side interface for this link (by ifIndex/name)."""
@@ -393,6 +401,38 @@ class EdgeItem(QGraphicsPathItem):
             if normalize_port(iface.name) == key:
                 return iface
         return None
+
+    def target_interface(self) -> Optional[Interface]:
+        """Resolve the target-side interface (by port name — no ifIndex stored)."""
+        device = self.target.device
+        key = normalize_port(self.link.target_port)
+        for iface in device.interfaces.values():
+            if normalize_port(iface.name) == key:
+                return iface
+        return None
+
+    @staticmethod
+    def _iface_down(iface: Optional[Interface]) -> bool:
+        return iface is not None and iface.oper_status == 'down'
+
+    def refresh_state(self) -> None:
+        """Recompute the link state from the two endpoints' oper_status.
+
+        Any endpoint down → offline; otherwise (up, unknown or unresolved)
+        → active.  Traffic is intentionally ignored.
+        """
+        if self._iface_down(self.source_interface()) or self._iface_down(self.target_interface()):
+            self.state = 'down'
+        else:
+            self.state = 'active'
+
+    def _pen(self) -> QPen:
+        if self.state == 'down':
+            return QPen(DOWN_COLOR, 2.5)
+        pen = QPen(ACTIVE_COLOR, 2.0)
+        pen.setDashPattern(DASH_PATTERN)
+        pen.setDashOffset(self._dash_offset)
+        return pen
 
     def traffic_label(self) -> str:
         iface = self.source_interface()
@@ -416,8 +456,10 @@ class EdgeItem(QGraphicsPathItem):
         self.setPath(path)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        super().paint(painter, option, widget)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(self._pen())
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(self.path())
         s = self.source.pos()
         t = self.target.pos()
         mid = (s + t) / 2
@@ -887,6 +929,19 @@ class TopologyView(QGraphicsView):
         self._save_timer.setInterval(800)
         self._save_timer.timeout.connect(self.save_map)
         self._scene.node_removed.connect(self._schedule_save)
+        self._dash_phase = 0.0
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(40)
+        self._anim_timer.timeout.connect(self._tick_animation)
+        self._anim_timer.start()
+
+    def _tick_animation(self) -> None:
+        """Advance the marching-ants phase and repaint only active edges."""
+        self._dash_phase = (self._dash_phase + 1.0) % DASH_PERIOD
+        for edge in self._scene.edge_items:
+            if edge.state == 'active' and edge.isVisible():
+                edge._dash_offset = self._dash_phase
+                edge.update()
 
     def set_layout_path(self, path: str) -> None:
         """Enable/change automatic persistence of manual node positions."""
@@ -1120,8 +1175,30 @@ class TopologyView(QGraphicsView):
                     iface.out_rate_bps = out_bps
             if node is not None:
                 node.refresh_tooltip()
+
         for edge in self._scene.edge_items:
-            edge.update()
+            edge.refresh_state()
+
+    def update_statuses(self, data: dict) -> None:
+        """Apply live interface oper-status (ifOperStatus) and refresh edges.
+
+        ``data`` is ``{device_id: {ifindex: 'up'|'down'|'unknown'}}``.
+        """
+        for device_id, statuses in data.items():
+            device = None
+            node = self._scene.node_items.get(device_id)
+            if node is not None:
+                device = node.device
+            elif self._scene.graph is not None:
+                device = self._scene.graph.devices.get(device_id)
+            if device is None:
+                continue
+            for idx, status in statuses.items():
+                iface = device.interfaces.get(idx)
+                if iface is not None:
+                    iface.oper_status = status
+        for edge in self._scene.edge_items:
+            edge.refresh_state()
 
 
 def load_graph(graph: TopologyGraph, layout_mode: str = 'hierarchical') -> TopologyView:
