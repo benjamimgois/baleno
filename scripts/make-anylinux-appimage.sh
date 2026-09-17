@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build a truly portable Anylinux AppImage for Cetus using quick-sharun.
+# Build a truly portable Anylinux AppImage for Baleno using quick-sharun.
 #
 # Uses: https://pkgforge-dev.github.io/Anylinux-AppImages/
 #
@@ -15,8 +15,8 @@ set -eux
 ARCH="$(uname -m)"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # repo root
 
-VERSION="$(grep -oP '(?<=^VERSION = \")[^\"]+' "$SCRIPT_DIR/cetuslib/constants.py" || echo "1.0")"
-OUTNAME="Cetus-${ARCH}.AppImage"
+VERSION="$(grep -oP '(?<=^VERSION = \")[^\"]+' "$SCRIPT_DIR/balenolib/constants.py" || echo "1.0")"
+OUTNAME="Baleno-${ARCH}.AppImage"
 
 QUICK_SHARUN_URL="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/quick-sharun.sh"
 GET_DEBLOATED_URL="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/get-debloated-pkgs.sh"
@@ -24,7 +24,7 @@ GET_DEBLOATED_URL="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppIm
 BUILD_DIR="$SCRIPT_DIR/build-anylinux"
 APPDIR="$BUILD_DIR/AppDir"
 
-echo "=== Cetus Anylinux AppImage Builder ==="
+echo "=== Baleno Anylinux AppImage Builder ==="
 echo "Version : $VERSION"
 echo "Arch    : $ARCH"
 echo "Build   : $BUILD_DIR"
@@ -66,7 +66,7 @@ fi
 
 
 # ── 1b. Bundle the modular source into a single executable ────────────────────
-echo "[1b/7] Bundling cetuslib into dist/cetus..."
+echo "[1b/7] Bundling balenolib into dist/baleno..."
 python3 "$SCRIPT_DIR/scripts/bundle-monolith.py"
 
 # ── 2. Prepare build directory ────────────────────────────────────────────────
@@ -91,15 +91,15 @@ fi
 #   During strace (system paths):
 #     /tmp/.../launcher → bin at /tmp/.../bin → appdir = /tmp/...
 #     python3 = /tmp/.../bin/python3  (or falls back to PATH /usr/bin/python3)
-#     script  = /tmp/.../usr/share/cetus/cetus
+#     script  = /tmp/.../usr/share/baleno/baleno
 #
 #   Inside AppDir (mounted AppImage):
-#     AppDir/shared/bin/cetus → dirname x2 → AppDir
+#     AppDir/shared/bin/baleno → dirname x2 → AppDir
 #     python3 = AppDir/bin/python3   (sharun hardlink → bundled Python)
-#     script  = AppDir/usr/share/cetus/cetus
+#     script  = AppDir/usr/share/baleno/baleno
 echo "[3/7] Compiling native launcher..."
 
-cat > "$BUILD_DIR/cetus-launcher.c" << 'LAUNCHER_EOF'
+cat > "$BUILD_DIR/baleno-launcher.c" << 'LAUNCHER_EOF'
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,7 +114,7 @@ int main(int argc, char *argv[])
     if (len < 0) { perror("readlink /proc/self/exe"); return 1; }
     self[len] = '\0';
 
-    /* shared/bin/cetus  →  dirname x2  →  AppDir root  */
+    /* shared/bin/baleno  →  dirname x2  →  AppDir root  */
     char *p1 = strdup(self);
     char *bin_dir    = strdup(dirname(p1));      /* …/shared/bin   */
     char *shared_dir = strdup(dirname(bin_dir)); /* …/shared       */
@@ -123,7 +123,7 @@ int main(int argc, char *argv[])
 
     char python[PATH_MAX], script[PATH_MAX];
     snprintf(python, PATH_MAX, "%s/bin/python3",               app_dir);
-    snprintf(script, PATH_MAX, "%s/usr/share/cetus/cetus", app_dir);
+    snprintf(script, PATH_MAX, "%s/usr/share/baleno/baleno", app_dir);
     free(bin_dir); free(shared_dir); free(app_dir);
 
     char **new_argv = malloc((argc + 2) * sizeof(char *));
@@ -145,8 +145,8 @@ int main(int argc, char *argv[])
 }
 LAUNCHER_EOF
 
-gcc -O2 -march=x86-64 -o "$BUILD_DIR/cetus-bin" "$BUILD_DIR/cetus-launcher.c"
-echo "  Compiled: $BUILD_DIR/cetus-bin ($(file "$BUILD_DIR/cetus-bin" | cut -d: -f2 | xargs))"
+gcc -O2 -march=x86-64 -o "$BUILD_DIR/baleno-bin" "$BUILD_DIR/baleno-launcher.c"
+echo "  Compiled: $BUILD_DIR/baleno-bin ($(file "$BUILD_DIR/baleno-bin" | cut -d: -f2 | xargs))"
 
 # ── 4. Stage app files in a local prefix (replaces system install) ────────────
 # quick-sharun traces the binary from its real location, so we set up a local
@@ -155,28 +155,28 @@ echo "[4/7] Staging app files..."
 
 PREFIX="$BUILD_DIR/prefix"
 mkdir -p "$PREFIX/usr/bin"
-mkdir -p "$PREFIX/usr/share/cetus/assets/icons"
-mkdir -p "$PREFIX/usr/share/cetus/assets/vendors"
+mkdir -p "$PREFIX/usr/share/baleno/assets/icons"
+mkdir -p "$PREFIX/usr/share/baleno/assets/vendors"
 mkdir -p "$PREFIX/usr/share/applications"
 mkdir -p "$PREFIX/usr/share/icons/hicolor/256x256/apps"
 
-cp "$BUILD_DIR/cetus-bin"              "$PREFIX/usr/bin/cetus"
-cp "$SCRIPT_DIR/dist/cetus"            "$PREFIX/usr/share/cetus/cetus"
-cp "$SCRIPT_DIR/assets/icons/"*.svg      "$PREFIX/usr/share/cetus/assets/icons/"
-cp "$SCRIPT_DIR/assets/vendors/"*.svg    "$PREFIX/usr/share/cetus/assets/vendors/"
-cp "$SCRIPT_DIR/cetus.desktop"         "$PREFIX/usr/share/applications/cetus.desktop"
+cp "$BUILD_DIR/baleno-bin"              "$PREFIX/usr/bin/baleno"
+cp "$SCRIPT_DIR/dist/baleno"            "$PREFIX/usr/share/baleno/baleno"
+cp "$SCRIPT_DIR/assets/icons/"*.svg      "$PREFIX/usr/share/baleno/assets/icons/"
+cp "$SCRIPT_DIR/assets/vendors/"*.svg    "$PREFIX/usr/share/baleno/assets/vendors/"
+cp "$SCRIPT_DIR/baleno.desktop"         "$PREFIX/usr/share/applications/baleno.desktop"
 
 # Icon: use PNG from assets if available
-if [ -f "$SCRIPT_DIR/assets/icons/cetus.png" ]; then
-    cp "$SCRIPT_DIR/assets/icons/cetus.png" \
-       "$PREFIX/usr/share/icons/hicolor/256x256/apps/cetus.png"
+if [ -f "$SCRIPT_DIR/assets/icons/baleno.png" ]; then
+    cp "$SCRIPT_DIR/assets/icons/baleno.png" \
+       "$PREFIX/usr/share/icons/hicolor/256x256/apps/baleno.png"
 else
     # Convert SVG to PNG as fallback
-    _svg=$(ls "$SCRIPT_DIR/assets/icons/cetus"*.svg 2>/dev/null | head -1)
+    _svg=$(ls "$SCRIPT_DIR/assets/icons/baleno"*.svg 2>/dev/null | head -1)
     if [ -n "$_svg" ]; then
         rsvg-convert -w 256 -h 256 "$_svg" \
-            -o "$PREFIX/usr/share/icons/hicolor/256x256/apps/cetus.png" 2>/dev/null || \
-        cp "$_svg" "$PREFIX/usr/share/icons/hicolor/256x256/apps/cetus.png"
+            -o "$PREFIX/usr/share/icons/hicolor/256x256/apps/baleno.png" 2>/dev/null || \
+        cp "$_svg" "$PREFIX/usr/share/icons/hicolor/256x256/apps/baleno.png"
     fi
 fi
 
@@ -193,19 +193,19 @@ chmod +x "$BUILD_DIR/quick-sharun" "$BUILD_DIR/get-debloated-pkgs.sh"
 echo "[6/7] Deploying with quick-sharun (strace phase — may take a few minutes)..."
 
 export APPDIR
-export ICON="$PREFIX/usr/share/icons/hicolor/256x256/apps/cetus.png"
-export DESKTOP="$PREFIX/usr/share/applications/cetus.desktop"
+export ICON="$PREFIX/usr/share/icons/hicolor/256x256/apps/baleno.png"
+export DESKTOP="$PREFIX/usr/share/applications/baleno.desktop"
 export OUTPATH="$SCRIPT_DIR"
 export OUTNAME
 export DEPLOY_PYTHON=1
 export DEPLOY_QT=1
 export DEPLOY_OPENGL=1
-export MAIN_BIN="cetus"
+export MAIN_BIN="baleno"
 # Tell lib4bin where to find libraries
 export LIB_DIR=/usr/lib
 
 # Use existing display (we're in a graphical session)
-# The C launcher will exec python3 → cetus --help, giving strace all Qt libs
+# The C launcher will exec python3 → baleno --help, giving strace all Qt libs
 _DISPLAY="${DISPLAY:-:0}"
 _WAYLAND="${WAYLAND_DISPLAY:-}"
 
@@ -223,9 +223,9 @@ cd "$BUILD_DIR"
 
 # quick-sharun syntax: binary [-- strace-args]
 # We trace the launcher which calls: python3 <script> --help
-"$BUILD_DIR/quick-sharun" "$PREFIX/usr/bin/cetus" -- \
-    "$PREFIX/usr/bin/cetus" --help 2>/dev/null || \
-"$BUILD_DIR/quick-sharun" "$PREFIX/usr/bin/cetus"
+"$BUILD_DIR/quick-sharun" "$PREFIX/usr/bin/baleno" -- \
+    "$PREFIX/usr/bin/baleno" --help 2>/dev/null || \
+"$BUILD_DIR/quick-sharun" "$PREFIX/usr/bin/baleno"
 
 # ── 6b. Post-deploy: copy app data, extra binaries & custom AppRun ───────────
 
@@ -254,12 +254,12 @@ _bundle_exe() {
 }
 
 echo "  Copying app data into AppDir..."
-install -dm755 "$APPDIR/usr/share/cetus/assets/icons"
-install -dm755 "$APPDIR/usr/share/cetus/assets/vendors"
-cp "$SCRIPT_DIR/dist/cetus"           "$APPDIR/usr/share/cetus/cetus"
-cp "$SCRIPT_DIR/assets/icons/"*.svg     "$APPDIR/usr/share/cetus/assets/icons/"
-cp "$SCRIPT_DIR/assets/icons/"*.png     "$APPDIR/usr/share/cetus/assets/icons/" 2>/dev/null || true
-cp "$SCRIPT_DIR/assets/vendors/"*.svg   "$APPDIR/usr/share/cetus/assets/vendors/"
+install -dm755 "$APPDIR/usr/share/baleno/assets/icons"
+install -dm755 "$APPDIR/usr/share/baleno/assets/vendors"
+cp "$SCRIPT_DIR/dist/baleno"           "$APPDIR/usr/share/baleno/baleno"
+cp "$SCRIPT_DIR/assets/icons/"*.svg     "$APPDIR/usr/share/baleno/assets/icons/"
+cp "$SCRIPT_DIR/assets/icons/"*.png     "$APPDIR/usr/share/baleno/assets/icons/" 2>/dev/null || true
+cp "$SCRIPT_DIR/assets/vendors/"*.svg   "$APPDIR/usr/share/baleno/assets/vendors/"
 
 # ── Bundle Qt platform plugins (XCB + Wayland + themes) ──────────────────────
 # The strace phase captures Qt plugin loads for the running session's display,
@@ -351,7 +351,7 @@ if [ "$_vnc_ok" = "0" ]; then
     [ "$_vnc_ok" = "0" ] && echo "    WARNING: no VNC viewer found"
 fi
 
-# Custom AppRun — calls bundled python3 (sharun hardlink) with the cetus script
+# Custom AppRun — calls bundled python3 (sharun hardlink) with the baleno script
 cat > "$APPDIR/AppRun" << 'APPRUN_EOF'
 #!/bin/sh
 APPDIR="$(cd "${0%/*}" && echo "$PWD")"
@@ -363,7 +363,7 @@ export PATH="$APPDIR/bin:$APPDIR/usr/bin:$PATH"
 export QT_PLUGIN_PATH="$APPDIR/usr/lib/qt6/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
 
 # Force X11/XWayland platform: reliable window decorations on every distro.
-# Users who want native Wayland: QT_QPA_PLATFORM=wayland ./Cetus.AppImage
+# Users who want native Wayland: QT_QPA_PLATFORM=wayland ./Baleno.AppImage
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 
 # Run any deployed hooks
@@ -385,7 +385,7 @@ done
 export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 exec "$APPDIR/bin/python3" \
-     "$APPDIR/usr/share/cetus/cetus" "$@"
+     "$APPDIR/usr/share/baleno/baleno" "$@"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"
 

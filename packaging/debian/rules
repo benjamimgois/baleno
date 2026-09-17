@@ -8,42 +8,42 @@ override_dh_auto_build:
 
 override_dh_auto_install:
 	# Install bundled monolith
-	install -Dm755 dist/cetus debian/cetus/usr/bin/cetus
+	install -Dm755 dist/baleno debian/baleno/usr/bin/baleno
 
 	# Install SVG icon (scalable)
-	install -Dm644 assets/icons/cetus_icon.svg debian/cetus/usr/share/icons/hicolor/scalable/apps/cetus.svg
+	install -Dm644 assets/icons/baleno_icon.svg debian/baleno/usr/share/icons/hicolor/scalable/apps/baleno.svg
 	# Install pre-built PNG sizes
 	for size in 16 32 48 64 128 256 512; do \
-		install -Dm644 assets/icons/cetus-$${size}.png \
-			debian/cetus/usr/share/icons/hicolor/$${size}x$${size}/apps/cetus.png; \
+		install -Dm644 assets/icons/baleno-$${size}.png \
+			debian/baleno/usr/share/icons/hicolor/$${size}x$${size}/apps/baleno.png; \
 	done
 
 	# Install author photo for About dialog
-	install -Dm644 assets/photo.png debian/cetus/usr/share/cetus/photo.png
+	install -Dm644 assets/photo.png debian/baleno/usr/share/baleno/photo.png
 
 	# Install UI icons (sidebar and misc) — all SVGs
 	for icon in assets/icons/*.svg; do \
-		install -Dm644 "$$icon" "debian/cetus/usr/share/cetus/icons/$$(basename $$icon)"; \
+		install -Dm644 "$$icon" "debian/baleno/usr/share/baleno/icons/$$(basename $$icon)"; \
 	done
 
 	# Install vendor icons
-	install -Dm644 assets/vendors/default.svg debian/cetus/usr/share/cetus/vendors/default.svg
-	install -Dm644 assets/vendors/cisco.svg debian/cetus/usr/share/cetus/vendors/cisco.svg
-	install -Dm644 assets/vendors/huawei.svg debian/cetus/usr/share/cetus/vendors/huawei.svg
-	install -Dm644 assets/vendors/juniper.svg debian/cetus/usr/share/cetus/vendors/juniper.svg
-	install -Dm644 assets/vendors/fortinet.svg debian/cetus/usr/share/cetus/vendors/fortinet.svg
-	install -Dm644 assets/vendors/d-link.svg debian/cetus/usr/share/cetus/vendors/d-link.svg
-	install -Dm644 assets/vendors/h3c.svg debian/cetus/usr/share/cetus/vendors/h3c.svg
-	install -Dm644 assets/vendors/brocade.svg debian/cetus/usr/share/cetus/vendors/brocade.svg
-	install -Dm644 assets/vendors/datacom.svg debian/cetus/usr/share/cetus/vendors/datacom.svg
-	install -Dm644 assets/vendors/aruba.svg debian/cetus/usr/share/cetus/vendors/aruba.svg
-	install -Dm644 assets/vendors/linux.svg debian/cetus/usr/share/cetus/vendors/linux.svg
-	install -Dm644 assets/vendors/mikrotik.svg debian/cetus/usr/share/cetus/vendors/mikrotik.svg
+	install -Dm644 assets/vendors/default.svg debian/baleno/usr/share/baleno/vendors/default.svg
+	install -Dm644 assets/vendors/cisco.svg debian/baleno/usr/share/baleno/vendors/cisco.svg
+	install -Dm644 assets/vendors/huawei.svg debian/baleno/usr/share/baleno/vendors/huawei.svg
+	install -Dm644 assets/vendors/juniper.svg debian/baleno/usr/share/baleno/vendors/juniper.svg
+	install -Dm644 assets/vendors/fortinet.svg debian/baleno/usr/share/baleno/vendors/fortinet.svg
+	install -Dm644 assets/vendors/d-link.svg debian/baleno/usr/share/baleno/vendors/d-link.svg
+	install -Dm644 assets/vendors/h3c.svg debian/baleno/usr/share/baleno/vendors/h3c.svg
+	install -Dm644 assets/vendors/brocade.svg debian/baleno/usr/share/baleno/vendors/brocade.svg
+	install -Dm644 assets/vendors/datacom.svg debian/baleno/usr/share/baleno/vendors/datacom.svg
+	install -Dm644 assets/vendors/aruba.svg debian/baleno/usr/share/baleno/vendors/aruba.svg
+	install -Dm644 assets/vendors/linux.svg debian/baleno/usr/share/baleno/vendors/linux.svg
+	install -Dm644 assets/vendors/mikrotik.svg debian/baleno/usr/share/baleno/vendors/mikrotik.svg
 
 	# Install desktop file
-	install -Dm644 cetus.desktop debian/cetus/usr/share/applications/cetus.desktop
+	install -Dm644 baleno.desktop debian/baleno/usr/share/applications/baleno.desktop
 
 	# Install documentation
-	install -Dm644 README.md debian/cetus/usr/share/doc/cetus/README.md
-	install -Dm644 docs/INTERFACE.md debian/cetus/usr/share/doc/cetus/INTERFACE.md
-	install -Dm644 LICENSE debian/cetus/usr/share/doc/cetus/copyright
+	install -Dm644 README.md debian/baleno/usr/share/doc/baleno/README.md
+	install -Dm644 docs/INTERFACE.md debian/baleno/usr/share/doc/baleno/INTERFACE.md
+	install -Dm644 LICENSE debian/baleno/usr/share/doc/baleno/copyright

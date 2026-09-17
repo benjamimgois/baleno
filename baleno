@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Baleno launcher — imports the modular package and starts the GUI."""
+
+import sys
+from pathlib import Path
+
+# Allow running from source tree or from a relocated install where balenolib
+# lives next to this script, under /usr/share/baleno, or in site-packages.
+if 'balenolib' not in sys.modules:
+    try:
+        import balenolib  # noqa: F401
+    except ImportError:
+        script_dir = Path(__file__).resolve().parent
+        for prefix in (
+            script_dir / 'balenolib',
+            script_dir,
+            script_dir.parent / 'share' / 'baleno',
+            Path('/usr/share/baleno'),
+            Path('/usr/local/share/baleno'),
+        ):
+            if (prefix / 'balenolib').is_dir() and str(prefix) not in sys.path:
+                sys.path.insert(0, str(prefix))
+                try:
+                    import balenolib  # noqa: F401
+                    break
+                except ImportError:
+                    pass
+        else:
+            # Last resort: search site-packages where the wheel installer
+            # places balenolib when installed via AUR or pip.
+            try:
+                import site
+                for sp in site.getsitepackages():
+                    sp_path = Path(sp)
+                    if (sp_path / 'balenolib').is_dir() and str(sp_path) not in sys.path:
+                        sys.path.insert(0, str(sp_path))
+                        try:
+                            import balenolib  # noqa: F401
+                            break
+                        except ImportError:
+                            pass
+            except Exception:
+                pass
+
+from balenolib.main import main
+
+if __name__ == '__main__':
+    main()

@@ -1,12 +1,12 @@
-# Cetus — Agent Context File
+# Baleno — Agent Context File
 
 > This file is intended for AI agents and automated tooling. It describes the project architecture, conventions, and workflows so agents can make safe, useful changes.
 
 ---
 
-## 1. What is Cetus?
+## 1. What is Baleno?
 
-Cetus is a **desktop GUI application for Linux** that provides an easy, modern interface to manage network devices. It targets network engineers and system administrators who need serial, SSH, Telnet, VNC, RDP, SNMP, file transfer, speed tests, Wi-Fi surveys, and network discovery tools in a single PyQt6 application.
+Baleno is a **desktop GUI application for Linux** that provides an easy, modern interface to manage network devices. It targets network engineers and system administrators who need serial, SSH, Telnet, VNC, RDP, SNMP, file transfer, speed tests, Wi-Fi surveys, and network discovery tools in a single PyQt6 application.
 
 - **Language**: Python 3.8+
 - **GUI Framework**: PyQt6 (Qt6)
@@ -22,38 +22,38 @@ Cetus is a **desktop GUI application for Linux** that provides an easy, modern i
 
 The source code is split into a Python package for maintainability, but a single-file executable is still produced for distribution:
 
-- **`cetuslib/`** — Modular source package:
+- **`balenolib/`** — Modular source package:
   - `config.py`, `constants.py`, `utils.py`
   - `terminal.py` — terminal widgets
   - `workers.py` — background workers
   - `network.py` — network/graph widgets
   - `ui/` — reusable UI components
   - `main.py` — `SerialTerminalGUI` and `main()`
-- **`cetus`** (launcher) — Thin root entrypoint that imports `cetuslib.main.main()`.
-- **`dist/cetus`** — Generated monolithic executable (via `scripts/bundle-monolith.py`) used for AppImage, `.deb`, and AUR.
+- **`baleno`** (launcher) — Thin root entrypoint that imports `balenolib.main.main()`.
+- **`dist/baleno`** — Generated monolithic executable (via `scripts/bundle-monolith.py`) used for AppImage, `.deb`, and AUR.
 
 ### 2.2 Key Classes
 
 | Class | Module | Responsibility |
 |-------|--------|----------------|
-| `SerialTerminalGUI` | `cetuslib/main.py` | Main window (QMainWindow). Hosts tabs, menu bar, and global state. |
-| `TerminalWidget` | `cetuslib/terminal.py` | VT100/ANSI terminal emulator using `pyte`. Supports scrollback, search, syntax highlighting, autocomplete, and cursor overlay. |
-| `TerminalDialog` | `cetuslib/terminal.py` | Dialog window embedding a `TerminalWidget` for serial/SSH/Telnet sessions. |
-| `TerminalTabbedWindow` | `cetuslib/terminal.py` | Detachable tabbed terminal window for multi-session management. |
-| `ConfigManager` | `cetuslib/config.py` | JSON-based settings persistence (XDG Base Directory). Handles serial/SSH profiles, SNMP community history, and quick notes. |
-| `ScanWorker` | `cetuslib/workers.py` | IP scanner worker (ICMP/TCP/UDP/ARP). |
-| `ConnectionWorker` | `cetuslib/workers.py` | SSH/Telnet connection worker using `paramiko` / `telnetlib`. |
-| `TracerouteWorker` | `cetuslib/workers.py` | Traceroute execution worker. |
-| `MtrWorker` | `cetuslib/workers.py` | MTR continuous traceroute worker. |
-| `Iperf3Worker` | `cetuslib/workers.py` | iPerf3 throughput test worker. |
-| `SpeedTestWorker` | `cetuslib/workers.py` | Internet speed test worker (fast.com / iPerf3). |
-| `WifiChannelChart` | `cetuslib/network.py` | Custom QWidget rendering channel usage with Gaussian curves. |
-| `WifiHeatmapWidget` | `cetuslib/network.py` | Wi-Fi signal strength heatmap visualization. |
-| `FileConnectWorker` | `cetuslib/workers.py` | SFTP connection worker. |
-| `FileListWorker` | `cetuslib/workers.py` | SFTP file listing worker. |
-| `FileTransferWorker` | `cetuslib/workers.py` | SFTP upload/download worker. |
-| `NmapDiscoverWorker` | `cetuslib/workers.py` | Nmap OS/service discovery worker. |
-| `VendorConfigTemplateDialog` | `cetuslib/main.py` | Dialog with vendor-specific command reference and config templates. |
+| `SerialTerminalGUI` | `balenolib/main.py` | Main window (QMainWindow). Hosts tabs, menu bar, and global state. |
+| `TerminalWidget` | `balenolib/terminal.py` | VT100/ANSI terminal emulator using `pyte`. Supports scrollback, search, syntax highlighting, autocomplete, and cursor overlay. |
+| `TerminalDialog` | `balenolib/terminal.py` | Dialog window embedding a `TerminalWidget` for serial/SSH/Telnet sessions. |
+| `TerminalTabbedWindow` | `balenolib/terminal.py` | Detachable tabbed terminal window for multi-session management. |
+| `ConfigManager` | `balenolib/config.py` | JSON-based settings persistence (XDG Base Directory). Handles serial/SSH profiles, SNMP community history, and quick notes. |
+| `ScanWorker` | `balenolib/workers.py` | IP scanner worker (ICMP/TCP/UDP/ARP). |
+| `ConnectionWorker` | `balenolib/workers.py` | SSH/Telnet connection worker using `paramiko` / `telnetlib`. |
+| `TracerouteWorker` | `balenolib/workers.py` | Traceroute execution worker. |
+| `MtrWorker` | `balenolib/workers.py` | MTR continuous traceroute worker. |
+| `Iperf3Worker` | `balenolib/workers.py` | iPerf3 throughput test worker. |
+| `SpeedTestWorker` | `balenolib/workers.py` | Internet speed test worker (fast.com / iPerf3). |
+| `WifiChannelChart` | `balenolib/network.py` | Custom QWidget rendering channel usage with Gaussian curves. |
+| `WifiHeatmapWidget` | `balenolib/network.py` | Wi-Fi signal strength heatmap visualization. |
+| `FileConnectWorker` | `balenolib/workers.py` | SFTP connection worker. |
+| `FileListWorker` | `balenolib/workers.py` | SFTP file listing worker. |
+| `FileTransferWorker` | `balenolib/workers.py` | SFTP upload/download worker. |
+| `NmapDiscoverWorker` | `balenolib/workers.py` | Nmap OS/service discovery worker. |
+| `VendorConfigTemplateDialog` | `balenolib/main.py` | Dialog with vendor-specific command reference and config templates. |
 
 ### 2.3 Threading Model
 
@@ -66,7 +66,7 @@ The source code is split into a Python package for maintainability, but a single
 
 ### 2.4 Configuration & State
 
-- **Config path**: `~/.config/cetus/settings.json` (XDG compliant).
+- **Config path**: `~/.config/baleno/settings.json` (XDG compliant).
 - **ConfigManager** merges defaults with loaded JSON on startup.
 - Profiles (SSH, serial) are stored as JSON strings inside the settings dict (legacy reason: flat JSON structure).
 - Passwords in profiles are **base64-encoded only** — not encrypted. This is a known limitation.
@@ -109,7 +109,7 @@ Many features spawn external processes. The app expects these binaries in `$PATH
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/bundle-monolith.py` | Generate `dist/cetus` from `cetuslib/` modules |
+| `scripts/bundle-monolith.py` | Generate `dist/baleno` from `balenolib/` modules |
 | `scripts/make-deb.sh` | Build Debian `.deb` package |
 | `scripts/build-deb-manual.sh` | Manual deb build |
 | `scripts/make-release.sh` | Generate release tarball |
@@ -127,14 +127,14 @@ Additional packaging:
 ## 4. Project Structure
 
 ```
-cetus/
-├── cetus                  ← Main application launcher (imports cetuslib)
-├── cetus.desktop          ← Linux .desktop launcher
+baleno/
+├── baleno                  ← Main application launcher (imports balenolib)
+├── baleno.desktop          ← Linux .desktop launcher
 ├── appinfo                ← AppStream / app metadata
 ├── README.md              ← Human-facing documentation
 ├── LICENSE                ← GPL-3.0
 │
-├── cetuslib/              ← Modular source package
+├── balenolib/              ← Modular source package
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── config.py
@@ -152,10 +152,10 @@ cetus/
 │       └── widgets.py
 │
 ├── dist/
-│   └── cetus              ← Generated monolithic executable
+│   └── baleno              ← Generated monolithic executable
 │
 ├── assets/
-│   ├── icons/             ← SVG icons (cetus_icon.svg, etc.)
+│   ├── icons/             ← SVG icons (baleno_icon.svg, etc.)
 │   └── remmina/           ← Remmina integration assets
 │
 ├── scripts/               ← Build and packaging scripts
@@ -167,7 +167,7 @@ cetus/
 │
 ├── packaging/
 │   └── flatpak/
-│       └── io.github.benjamimgois.cetus.yml
+│       └── io.github.benjamimgois.baleno.yml
 │
 ├── debian/                ← Debian package metadata
 ├── build-anylinux/        ← AppImage build artifacts
@@ -195,24 +195,24 @@ sudo apt install python3-pyqt6 python3-pyqt6.qtserialport picocom \
 pip3 install pyte paramiko pysnmp
 
 # Run directly
-chmod +x cetus
-./cetus
+chmod +x baleno
+./baleno
 # or
-python3 cetus
+python3 baleno
 ```
 
 ### 5.2 Development Mode
 
-Edit modules under `cetuslib/` and run the launcher directly. No bundler step is needed during development.
+Edit modules under `balenolib/` and run the launcher directly. No bundler step is needed during development.
 
 ```bash
 # Run from source
-./cetus
+./baleno
 # or
-python3 -m cetuslib
+python3 -m balenolib
 
 # Syntax check after editing
-python3 -m py_compile cetuslib/main.py cetuslib/terminal.py cetuslib/workers.py
+python3 -m py_compile balenolib/main.py balenolib/terminal.py balenolib/workers.py
 
 # Regenerate the distribution monolith
 python3 scripts/bundle-monolith.py
@@ -224,7 +224,7 @@ python3 scripts/bundle-monolith.py
 cd scripts
 chmod +x make-deb.sh
 ./make-deb.sh
-sudo dpkg -i ../cetus_1.8-1_all.deb
+sudo dpkg -i ../baleno_1.9-1_all.deb
 ```
 
 ### 5.4 Build AppImage
@@ -277,7 +277,7 @@ chmod +x make-anylinux-appimage.sh
 
 ## 7. Known Issues & Limitations
 
-- **Monolithic file**: `dist/cetus` is generated from `cetuslib/`. Edit `cetuslib/` and regenerate the bundle; do not edit `dist/cetus` directly.
+- **Monolithic file**: `dist/baleno` is generated from `balenolib/`. Edit `balenolib/` and regenerate the bundle; do not edit `dist/baleno` directly.
 - **Password storage**: SSH profile passwords are base64-encoded, not encrypted.
 - **Thread safety**: Some workers may still emit signals under high load that race with UI updates. Always use `QMetaObject.invokeMethod` for direct widget mutations from threads.
 - **Telnet deprecation**: `telnetlib` is deprecated in Python 3.13+; the app uses `standard-telnetlib` as a fallback.
@@ -311,7 +311,7 @@ chmod +x make-anylinux-appimage.sh
 
 1. Add `from typing import Any, Optional, Callable` near the top imports.
 2. Annotate method signatures: `def method(self, arg: str) -> dict[str, Any]:`.
-3. Run `python3 -m py_compile cetuslib/main.py` to verify syntax.
+3. Run `python3 -m py_compile balenolib/main.py` to verify syntax.
 
 ---
 
@@ -319,9 +319,9 @@ chmod +x make-anylinux-appimage.sh
 
 When cutting a new release:
 
-1. Update `VERSION` and `VERSION_LABEL` in `cetuslib/constants.py`.
+1. Update `VERSION` and `VERSION_LABEL` in `balenolib/constants.py`.
 2. Update version in `PKGBUILD`, `debian/changelog`, and `appinfo`.
-3. Run `python3 -m py_compile cetuslib/main.py` and regenerate `dist/cetus` with `python3 scripts/bundle-monolith.py`.
+3. Run `python3 -m py_compile balenolib/main.py` and regenerate `dist/baleno` with `python3 scripts/bundle-monolith.py`.
 4. Build packages: `.deb`, AppImage, Flatpak.
 5. Test on clean VMs (Debian, Arch, Fedora).
 6. Tag release on GitHub and upload artifacts.

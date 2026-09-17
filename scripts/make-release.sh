@@ -1,13 +1,13 @@
 #!/bin/bash
-# Script to prepare Cetus for AUR submission
+# Script to prepare Baleno for AUR submission
 
 set -e
 
 VERSION="1.8"
-PKGNAME="cetus"
+PKGNAME="baleno"
 BUILD_DIR="/tmp/${PKGNAME}-build"
 
-echo "=== Cetus Release Builder ==="
+echo "=== Baleno Release Builder ==="
 echo "Version: ${VERSION}"
 echo ""
 
@@ -23,10 +23,10 @@ mkdir -p "${BUILD_DIR}/${PKGNAME}-${VERSION}"
 
 # Copy necessary files
 echo "Copying files..."
-cp cetus "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
-cp -r cetuslib "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
+cp baleno "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
+cp -r balenolib "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
 cp -r assets "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
-cp cetus.desktop "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
+cp baleno.desktop "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
 cp README.md "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
 cp -r docs "${BUILD_DIR}/${PKGNAME}-${VERSION}/"
 cp LICENSE "${BUILD_DIR}/${PKGNAME}-${VERSION}/"

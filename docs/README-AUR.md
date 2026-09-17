@@ -1,4 +1,4 @@
-# Cetus
+# Baleno
 
 Modern graphical interface for serial communication via picocom.
 
@@ -16,16 +16,16 @@ Modern graphical interface for serial communication via picocom.
 ### From AUR
 
 ```bash
-yay -S cetus
+yay -S baleno
 # or
-paru -S cetus
+paru -S baleno
 ```
 
 ### Manual Installation
 
 ```bash
-git clone https://aur.archlinux.org/cetus.git
-cd cetus
+git clone https://aur.archlinux.org/baleno.git
+cd baleno
 makepkg -si
 ```
 
@@ -34,7 +34,7 @@ makepkg -si
 Simply run:
 
 ```bash
-cetus
+baleno
 ```
 
 Or launch from your application menu.
@@ -78,4 +78,4 @@ MIT
 ## Links
 
 - GitHub: https://github.com/benjamimgois/opengrid
-- AUR: https://aur.archlinux.org/packages/cetus
+- AUR: https://aur.archlinux.org/packages/baleno

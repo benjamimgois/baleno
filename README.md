@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="128" height="128" alt="Cetus" src="assets/icons/cetus_icon.svg" />
+  <img width="128" height="128" alt="Baleno" src="assets/icons/baleno_icon.svg" />
 </p>
 
 <p align="center">
@@ -13,9 +13,9 @@
     <img src="https://img.shields.io/badge/Flatpak-Stable-blue?style=for-the-badge&logo=flatpak" alt="Flatpak">
   </a>
 
-  <a href="https://aur.archlinux.org/packages/cetus-git">
+  <a href="https://aur.archlinux.org/packages/baleno-git">
     <img
-      src="https://img.shields.io/aur/version/cetus-git?color=1793d1&label=AUR&style=for-the-badge"
+      src="https://img.shields.io/aur/version/baleno-git?color=1793d1&label=AUR&style=for-the-badge"
       alt="AUR version">
   </a>
 
@@ -131,7 +131,7 @@ Easy and modern interface to manage network devices — Serial, SSH, Telnet, VNC
 - **Automatic interactive replies** (e.g. `[Y/N]` confirmations, save prompts) per vendor
 - Serial or parallel execution (configurable connection pool)
 - Per-host result table with status (OK / error / timeout / cancelled), duration and color coding
-- **Per-host logs** saved automatically under `~/.local/share/cetus/automation/` with run metadata; double-click a row to inspect the captured output
+- **Per-host logs** saved automatically under `~/.local/share/baleno/automation/` with run metadata; double-click a row to inspect the captured output
 - Stop button with responsive session cancellation; optional credential remembering (stored base64-encoded — see note below)
 
 
@@ -184,13 +184,13 @@ npm install -g fast-cli
 
 2. Install the package:
 ```bash
-sudo dpkg -i cetus_1.8-1_all.deb
+sudo dpkg -i baleno_1.9-1_all.deb
 sudo apt-get install -f  # Fix any missing dependencies
 ```
 
 3. Launch from application menu or terminal:
 ```bash
-cetus
+baleno
 ```
 
 ### Debian / Ubuntu (build from source)
@@ -209,15 +209,15 @@ chmod +x make-deb.sh
 
 3. Install the generated package:
 ```bash
-sudo dpkg -i ../cetus_1.8-1_all.deb
+sudo dpkg -i ../baleno_1.9-1_all.deb
 ```
 
 ### Arch Linux / Manjaro (from AUR)
 
 ```bash
-yay -S cetus
+yay -S baleno
 # or
-paru -S cetus
+paru -S baleno
 ```
 
 ### Arch Linux / Manjaro (from package file)
@@ -226,25 +226,25 @@ paru -S cetus
 
 2. Install:
 ```bash
-sudo pacman -U cetus-1.8-1-any.pkg.tar.zst
+sudo pacman -U baleno-1.9-1-any.pkg.tar.zst
 ```
 
 ### Flatpak
 
 1. Install from Flathub (when available):
 ```bash
-flatpak install flathub io.github.benjamimgois.cetus
+flatpak install flathub io.github.benjamimgois.baleno
 ```
 
 2. Or build from source:
 ```bash
 cd packaging/flatpak
-flatpak-builder --install --user build io.github.benjamimgois.cetus.yml
+flatpak-builder --install --user build io.github.benjamimgois.baleno.yml
 ```
 
 3. Run:
 ```bash
-flatpak run io.github.benjamimgois.cetus
+flatpak run io.github.benjamimgois.baleno
 ```
 
 ### Other Linux Distributions
@@ -269,7 +269,7 @@ pip3 install standard-telnetlib
 
 2. Make executable:
 ```bash
-chmod +x cetus
+chmod +x baleno
 ```
 
 3. (Optional) Install system-wide:
@@ -281,9 +281,9 @@ chmod +x cetus
 ## Usage
 
 ```bash
-./cetus
+./baleno
 # or
-python3 -m cetuslib
+python3 -m balenolib
 ```
 
 ### Serial Connection
@@ -345,7 +345,7 @@ python3 -m cetuslib
 9. Double-click a result row to open the host log
 
 > **Security note:** checking **Remember** stores the username and password in
-> `~/.config/cetus/settings.json` encoded with base64 — this is **not**
+> `~/.config/baleno/settings.json` encoded with base64 — this is **not**
 > encryption (the same limitation applies to saved SSH profiles). Leave the
 > box unchecked to keep credentials out of disk.
 
@@ -377,8 +377,8 @@ Log out and back in to apply.
 ## Links
 
 - **GitHub**: https://github.com/benjamimgois/opengrid
-- **AUR Package**: https://aur.archlinux.org/packages/cetus
-- **Flathub**: https://flathub.org/apps/io.github.benjamimgois.cetus
+- **AUR Package**: https://aur.archlinux.org/packages/baleno
+- **Flathub**: https://flathub.org/apps/io.github.benjamimgois.baleno
 - **Releases**: https://github.com/benjamimgois/opengrid/releases
 - **Issues**: https://github.com/benjamimgois/opengrid/issues
 

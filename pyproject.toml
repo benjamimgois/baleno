@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cetus"
+name = "baleno"
 version = "1.8"
 description = "Modern graphical interface for network device management"
 readme = "README.md"
@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-cetus = "cetuslib.main:main"
+baleno = "balenolib.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cetuslib*"]
+include = ["balenolib*"]

@@ -13,7 +13,7 @@ repo/
 
 # Debian build
 /debian/
-debian/cetus/
+debian/baleno/
 *.deb
 *.buildinfo
 *.changes

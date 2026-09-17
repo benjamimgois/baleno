@@ -4,10 +4,10 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                       Cetus v1.0                    │
+│                       Baleno v1.0                    │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│                     Cetus v1.0                      │
+│                     Baleno v1.0                      │
 │                                                         │
 │  ┌────────────────────────────────────────────────┐   │
 │  │  Port Configuration                           │   │
@@ -177,9 +177,9 @@ In MTR mode the route refreshes continuously, providing live statistics:
 ### Permissions
 
 The traceroute binary requires `cap_net_raw` for TCP/UDP probe types.
-Cetus automatically configures this when starting the traceroute tab:
+Baleno automatically configures this when starting the traceroute tab:
 
 ```bash
-# Applied automatically by Cetus:
+# Applied automatically by Baleno:
 sudo setcap cap_net_raw+ep $(which traceroute)
 ```

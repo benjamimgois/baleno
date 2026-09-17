@@ -1,7 +1,7 @@
 #!/bin/bash
-# Cetus installation script
+# Baleno installation script
 
-echo "=== Cetus - Installation ==="
+echo "=== Baleno - Installation ==="
 echo ""
 
 # Detect package manager
@@ -94,26 +94,26 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PREFIX="${PREFIX:-/usr/local}"
 
-echo "6. Installing Cetus to $PREFIX..."
-install -Dm755 "$PROJECT_ROOT/cetus" "$PREFIX/bin/cetus"
-mkdir -p "$PREFIX/share/cetus"
-cp -r "$PROJECT_ROOT/cetuslib" "$PREFIX/share/cetus/"
+echo "6. Installing Baleno to $PREFIX..."
+install -Dm755 "$PROJECT_ROOT/baleno" "$PREFIX/bin/baleno"
+mkdir -p "$PREFIX/share/baleno"
+cp -r "$PROJECT_ROOT/balenolib" "$PREFIX/share/baleno/"
 
-echo "   ✓ cetus installed to $PREFIX/bin/cetus"
-echo "   ✓ cetuslib installed to $PREFIX/share/cetus/cetuslib"
+echo "   ✓ baleno installed to $PREFIX/bin/baleno"
+echo "   ✓ balenolib installed to $PREFIX/share/baleno/balenolib"
 
 # Install .desktop file
 echo "7. Installing menu shortcut..."
 mkdir -p ~/.local/share/applications
-cp "$PROJECT_ROOT/cetus.desktop" ~/.local/share/applications/
+cp "$PROJECT_ROOT/baleno.desktop" ~/.local/share/applications/
 echo "   ✓ Shortcut installed at ~/.local/share/applications/"
 
 echo ""
 echo "=== Installation Complete ==="
 echo ""
 echo "To run the application:"
-echo "  - From terminal: cetus"
-echo "  - From menu: Look for 'Cetus'"
+echo "  - From terminal: baleno"
+echo "  - From menu: Look for 'Baleno'"
 echo ""
 echo "IMPORTANT: If added to dialout group now,"
 echo "logout and login again to avoid password prompts."

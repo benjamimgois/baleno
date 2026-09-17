@@ -1,12 +1,12 @@
 #!/bin/bash
-# Script to build Debian package for Cetus
+# Script to build Debian package for Baleno
 
 set -e
 
 VERSION="1.8"
-PKGNAME="cetus"
+PKGNAME="baleno"
 
-echo "=== Cetus Debian Package Builder ==="
+echo "=== Baleno Debian Package Builder ==="
 echo "Version: ${VERSION}"
 echo ""
 

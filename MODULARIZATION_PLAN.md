@@ -1,6 +1,6 @@
-Plano de Modularização do Cetus
+Plano de Modularização do Baleno
 Visão Geral
-Este plano descreve a quebra do arquivo monolítono cetus (26.807 linhas) em módulos lógicos e bem definidos para melhorar a manutenibilidade, legibilidade e organização do código.
+Este plano descreve a quebra do arquivo monolítono baleno (26.807 linhas) em módulos lógicos e bem definidos para melhorar a manutenibilidade, legibilidade e organização do código.
 Componentes Identificados para Separação
 1. tftp_server.py - Funcionalidade TFTP completa
    - TFTPHandler (classe)
@@ -45,8 +45,8 @@ Componentes Identificados para Separação
     - Funções de formatação e conversão
     - Helpers sem dependências Qt pesadas
 Estrutura de Diretórios Proposta
-cetus/
-├── cetus.py              # Arquivo principal reduzido (orquestração)
+baleno/
+├── baleno.py              # Arquivo principal reduzido (orquestração)
 ├── modules/
 │   ├── __init__.py
 │   ├── tftp_server.py
@@ -127,7 +127,7 @@ Fase 3: Workers e Lógica de Negócio
 Fase 4: Interface e Integração
 9. dialogs.py
 10. main_window.py
-11. cetus.py (arquivo principal reduzido)
+11. baleno.py (arquivo principal reduzido)
 Benefícios Esperados
 1. Manutenibilidade: Arquivos menores e focados são mais fáceis de entender e modificar
 2. Reutilização: Componentes podem ser reutilizados ou testados isoladamente
@@ -138,7 +138,7 @@ Benefícios Esperados
 Considerações de Implementação
 - Manter compatibilidade total com a funcionalidade existente durante todo o processo
 - Usar importações relativas dentro do pacote modules quando apropriado
-- Manter o arquivo cetus.py como ponto de entrada que inicializa a aplicação
+- Manter o arquivo baleno.py como ponto de entrada que inicializa a aplicação
 - Garantir que todas as dependências entre módulos sejam explícitas e bem definidas
 - Considerar criar uma interface pública clara para cada módulo (funções/classes expostas)
 - Documentar responsabilidades e limites de cada módulo em docstrings

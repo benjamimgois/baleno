@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Baleno
+GenericName=Network Management
+Comment=Network management tools
+Exec=/usr/bin/baleno
+Icon=baleno
+Terminal=false
+Categories=Network;Internet;
+StartupWMClass=baleno
+Keywords=serial;ssh;telnet;vnc;rdp;tftp;sftp;ftp;smb;snmp;traceroute;iperf;wifi;scanner;network;

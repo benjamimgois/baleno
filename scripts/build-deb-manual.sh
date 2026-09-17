@@ -6,17 +6,17 @@ set -e
 
 VERSION="1.8"
 RELEASE="1"
-PKGNAME="cetus"
+PKGNAME="baleno"
 ARCH="all"
 BUILD_DIR="build-deb/${PKGNAME}_${VERSION}-${RELEASE}_${ARCH}"
 
-echo "=== Cetus Manual Debian Package Builder ==="
+echo "=== Baleno Manual Debian Package Builder ==="
 echo "Version: ${VERSION}"
 echo "Build Directory: ${BUILD_DIR}"
 echo ""
 
 # Check if running from project root
-if [ ! -f "cetus" ] || [ ! -d "assets" ]; then
+if [ ! -f "baleno" ] || [ ! -d "assets" ]; then
     echo "Error: Please run this script from the project root directory."
     exit 1
 fi
@@ -29,7 +29,7 @@ if ! command -v dpkg-deb &> /dev/null; then
 fi
 
 # Bundle the modular source into a single executable
-echo "Bundling cetuslib into dist/cetus..."
+echo "Bundling balenolib into dist/baleno..."
 python3 scripts/bundle-monolith.py
 
 # Clean previous build
@@ -42,36 +42,36 @@ mkdir -p "${BUILD_DIR}/DEBIAN"
 mkdir -p "${BUILD_DIR}/usr/bin"
 mkdir -p "${BUILD_DIR}/usr/share/applications"
 mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/512x512/apps"
-mkdir -p "${BUILD_DIR}/usr/share/cetus/icons"
-mkdir -p "${BUILD_DIR}/usr/share/cetus/vendors"
-mkdir -p "${BUILD_DIR}/usr/share/doc/cetus"
+mkdir -p "${BUILD_DIR}/usr/share/baleno/icons"
+mkdir -p "${BUILD_DIR}/usr/share/baleno/vendors"
+mkdir -p "${BUILD_DIR}/usr/share/doc/baleno"
 
 # Copy files
 echo "Copying application files..."
 
 # Main executable
-cp dist/cetus "${BUILD_DIR}/usr/bin/"
-chmod 755 "${BUILD_DIR}/usr/bin/cetus"
+cp dist/baleno "${BUILD_DIR}/usr/bin/"
+chmod 755 "${BUILD_DIR}/usr/bin/baleno"
 
 # Desktop file
-cp cetus.desktop "${BUILD_DIR}/usr/share/applications/"
+cp baleno.desktop "${BUILD_DIR}/usr/share/applications/"
 
 # App Icon
-cp assets/cetus.png "${BUILD_DIR}/usr/share/icons/hicolor/512x512/apps/"
+cp assets/baleno.png "${BUILD_DIR}/usr/share/icons/hicolor/512x512/apps/"
 
 # UI Icons
 echo "Copying UI icons..."
-cp assets/icons/*.svg "${BUILD_DIR}/usr/share/cetus/icons/"
+cp assets/icons/*.svg "${BUILD_DIR}/usr/share/baleno/icons/"
 
 # Vendor Icons
 echo "Copying vendor icons..."
-cp assets/vendors/*.svg "${BUILD_DIR}/usr/share/cetus/vendors/"
+cp assets/vendors/*.svg "${BUILD_DIR}/usr/share/baleno/vendors/"
 
 # Documentation
 echo "Copying documentation..."
-cp README.md "${BUILD_DIR}/usr/share/doc/cetus/"
-[ -f LICENSE ] && cp LICENSE "${BUILD_DIR}/usr/share/doc/cetus/copyright"
-[ -f docs/INTERFACE.md ] && cp docs/INTERFACE.md "${BUILD_DIR}/usr/share/doc/cetus/"
+cp README.md "${BUILD_DIR}/usr/share/doc/baleno/"
+[ -f LICENSE ] && cp LICENSE "${BUILD_DIR}/usr/share/doc/baleno/copyright"
+[ -f docs/INTERFACE.md ] && cp docs/INTERFACE.md "${BUILD_DIR}/usr/share/doc/baleno/"
 
 # Control file
 echo "Generating control file..."
@@ -85,7 +85,7 @@ Maintainer: Benjamim Gois <benjamimgois@example.com>
 Depends: python3 (>= 3.10), python3-pip, python3-pyte, python3-paramiko, picocom, beep, mtr | mtr-tiny, snmp, iw, network-manager, traceroute, whois
 Recommends: tigervnc-viewer, freerdp3-wayland | freerdp2-x11
 Description: Modern graphical interface for serial communication
- Cetus is a modern and elegant graphical interface for serial
+ Baleno is a modern and elegant graphical interface for serial
  communication via picocom, with support for SSH and Telnet connections.
  It provides an easy-to-use interface for configuring serial port
  parameters and establishing remote connections.

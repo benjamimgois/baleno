@@ -17,10 +17,10 @@ import subprocess
 from pathlib import Path
 
 # Configuration
-APP_NAME = "Cetus"
+APP_NAME = "Baleno"
 APP_VERSION = "1.8"
-SCRIPT_NAME = "cetus"
-ICON_NAME = "assets/icons/cetus-256.png"
+SCRIPT_NAME = "baleno"
+ICON_NAME = "assets/icons/baleno-256.png"
 
 # Directories
 BASE_DIR = Path(__file__).parent.absolute()

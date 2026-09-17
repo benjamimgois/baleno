@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Baleno
+GenericName=Network Management
+Comment=Network management tools
+Exec=baleno
+Icon=io.github.benjamimgois.baleno
+Terminal=false
+Categories=Network;Internet;
+Keywords=serial;ssh;telnet;vnc;rdp;tftp;sftp;ftp;smb;snmp;traceroute;iperf;wifi;scanner;network;picocom;tty;uart;
+StartupNotify=true
+StartupWMClass=baleno

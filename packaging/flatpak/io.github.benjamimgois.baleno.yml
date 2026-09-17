@@ -1,0 +1,125 @@
+app-id: io.github.benjamimgois.baleno
+runtime: org.kde.Platform
+runtime-version: '6.10'
+sdk: org.kde.Sdk
+base: com.riverbankcomputing.PyQt.BaseApp
+base-version: '6.10'
+command: baleno
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=all
+
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+
+modules:
+  - name: python3-pyte
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "pyte" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/3c/c1/d73f12f8cdb1891334a2ccf7389eed244d3941e74d80dd220badb937f3fb/wcwidth-0.5.3-py3-none-any.whl
+        sha256: d584eff31cd4753e1e5ff6c12e1edfdb324c995713f75d26c29807bb84bf649e
+      - type: file
+        url: https://files.pythonhosted.org/packages/59/d0/bb522283b90853afbf506cd5b71c650cf708829914efd0003d615cf426cd/pyte-0.8.2-py3-none-any.whl
+        sha256: 85db42a35798a5aafa96ac4d8da78b090b2c933248819157fc0e6f78876a0135
+
+  - name: python3-paramiko
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "paramiko" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
+        sha256: b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+      - type: file
+        url: https://files.pythonhosted.org/packages/98/df/0a1755e750013a2081e863e7cd37e0cdd02664372c754e5560099eb7aa44/cffi-2.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: c8d3b5532fc71b7a77c09192b4a5a200ea992702734a2e9279a37f2478236f26
+      - type: file
+        url: https://files.pythonhosted.org/packages/cb/c6/8fedca4c2ada1b6e889c52d2943b2f968d3427e5d65f595620ec4c06fa2f/bcrypt-4.3.0-cp39-abi3-manylinux_2_28_x86_64.whl
+        sha256: f1e3ffa1365e8702dc48c8b360fef8d7afeca482809c5e45e653af82ccd088c1
+      - type: file
+        url: https://files.pythonhosted.org/packages/2b/08/f83e2e0814248b844265802d081f2fac2f1cbe6cd258e72ba14ff006823a/cryptography-46.0.4-cp311-abi3-manylinux_2_28_x86_64.whl
+        sha256: 0a9ad24359fee86f131836a9ac3bffc9329e956624a2d379b613f8f8abaf5255
+      - type: file
+        url: https://files.pythonhosted.org/packages/3e/d0/f301f83ac8dbe53442c5a43f6a39016f94f754d7a9815a875b65e218a307/pynacl-1.6.2-cp38-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 8a66d6fb6ae7661c58995f9c6435bda2b1e68b54b598a6a10247bfcdadac996c
+      - type: file
+        url: https://files.pythonhosted.org/packages/1f/66/14b2c030fcce69cba482d205c2d1462ca5c77303a263260dcb1192801c85/paramiko-3.5.0-py3-none-any.whl
+        sha256: 1fedf06b085359051cd7d0d270cebe19e755a8a921cc2ddbfa647fb0cd7d68f9
+
+  - name: python3-telnetlib
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "standard-telnetlib" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/33/85/a1808451ac0b36c61dffe8aea21e45c64ba7da28f6cb0d269171298c6281/standard_telnetlib-3.13.0-py3-none-any.whl
+        sha256: b268060a3220c80c7887f2ad9df91cd81e865f0c5052332b81d80ffda8677691
+
+  - name: python3-pysnmp
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "pysnmp" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/44/b5/a96872e5184f354da9c84ae119971a0a4c221fe9b27a4d94bd43f2596727/pyasn1-0.6.2-py3-none-any.whl
+        sha256: 1eb26d860996a18e9b6ed05e7aae0e9fc21619fcee6af91cca9bad4fbea224bf
+      - type: file
+        url: https://files.pythonhosted.org/packages/25/da/9b6bc9517f6a69d03b70f43c4cfd1cca6289fdccabcf648204f2b0c6bc9b/pysnmp-7.1.22-py3-none-any.whl
+        sha256: 57e704a6ba2bbf571d16cd5dc08b89bb3fa0ebeb5f4f26b87fececad3b3de7a6
+
+  - name: picocom
+    buildsystem: simple
+    build-commands:
+      - make
+      - install -Dm755 picocom ${FLATPAK_DEST}/bin/picocom
+    sources:
+      - type: archive
+        url: https://github.com/npat-efault/picocom/archive/refs/tags/3.1.tar.gz
+        sha256: e6761ca932ffc6d09bd6b11ff018bdaf70b287ce518b3282d29e0270e88420bb
+        x-checker-data:
+          type: anitya
+          project-id: 11061
+          url-template: https://github.com/npat-efault/picocom/archive/refs/tags/$version.tar.gz
+
+  - name: baleno
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 baleno ${FLATPAK_DEST}/bin/baleno
+      - install -Dm644 assets/icons/baleno_icon.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 assets/baleno.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/${FLATPAK_ID}.png
+      - install -Dm644 assets/icons/baleno-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+      - install -Dm644 assets/icons/baleno-128.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/${FLATPAK_ID}.png
+      - install -Dm644 assets/icons/baleno-64.png ${FLATPAK_DEST}/share/icons/hicolor/64x64/apps/${FLATPAK_ID}.png
+      - install -Dm644 assets/icons/baleno-48.png ${FLATPAK_DEST}/share/icons/hicolor/48x48/apps/${FLATPAK_ID}.png
+      - install -Dm644 assets/icons/baleno-32.png ${FLATPAK_DEST}/share/icons/hicolor/32x32/apps/${FLATPAK_ID}.png
+      - install -Dm644 assets/photo.png ${FLATPAK_DEST}/share/baleno/photo.png
+      - for icon in assets/icons/*.svg; do install -Dm644 "$icon" "${FLATPAK_DEST}/share/${FLATPAK_ID}/icons/$(basename $icon)"; done
+      - install -Dm644 assets/vendors/default.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/default.svg
+      - install -Dm644 assets/vendors/cisco.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/cisco.svg
+      - install -Dm644 assets/vendors/huawei.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/huawei.svg
+      - install -Dm644 assets/vendors/juniper.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/juniper.svg
+      - install -Dm644 assets/vendors/fortinet.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/fortinet.svg
+      - install -Dm644 assets/vendors/d-link.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/d-link.svg
+      - install -Dm644 assets/vendors/h3c.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/h3c.svg
+      - install -Dm644 assets/vendors/brocade.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/brocade.svg
+      - install -Dm644 assets/vendors/datacom.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/datacom.svg
+      - install -Dm644 assets/vendors/aruba.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/aruba.svg
+      - install -Dm644 assets/vendors/linux.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/linux.svg
+      - install -Dm644 assets/vendors/mikrotik.svg ${FLATPAK_DEST}/share/${FLATPAK_ID}/vendors/mikrotik.svg
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml ${FLATPAK_DEST}/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      - install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/LICENSE
+    sources:
+      - type: dir
+        path: ../..
