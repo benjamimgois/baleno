@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import sys
 from typing import Optional
 
@@ -26,7 +27,8 @@ from PyQt6.QtWidgets import (
 from cetuslib.topology.models import (
     Device, DeviceRole, Interface, PortLink, TopologyGraph,
 )
-from cetuslib.topology.engine import TopologyEngine, normalize_port
+from cetuslib.utils import _get_mac_vendor
+from cetuslib.topology.engine import TopologyEngine, normalize_port, LAYOUTS
 from cetuslib.topology.persistence import (
     apply_layout, load_layout, load_group_layout, save_layout, default_layout_path,
     save_map, load_map, default_map_path,
@@ -74,6 +76,13 @@ def speed_color(mbps: float) -> QColor:
     if mbps > 0:
         return SPEED_LOW_COLOR
     return SPEED_UNKNOWN_COLOR
+
+
+_MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$')
+
+
+def _is_mac(value: str) -> bool:
+    return bool(value and _MAC_RE.match(value.strip()))
 
 ROLE_COLOR = {
     DeviceRole.CORE: QColor(88, 166, 255),
@@ -246,6 +255,86 @@ def draw_device_icon(painter: QPainter, center: QPointF, role: DeviceRole, color
     painter.restore()
 
 
+def draw_layout_icon(painter: QPainter, mode: str, rect: QRectF) -> None:
+    """Draw a small self-contained glyph for a layout mode inside ``rect``.
+
+    Drawn programmatically (no SVG assets): nodes as dots, links as lines.
+    """
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    color = QColor(139, 148, 158)
+    painter.setPen(QPen(color, 1.2))
+    painter.setBrush(color)
+    r = max(1.5, min(rect.width(), rect.height()) / 22.0)
+    w, h = rect.width(), rect.height()
+
+    def node(nx: float, ny: float) -> None:
+        painter.drawEllipse(QPointF(rect.left() + nx * w, rect.top() + ny * h), r, r)
+
+    def edge(x1: float, y1: float, x2: float, y2: float) -> None:
+        painter.drawLine(QPointF(rect.left() + x1 * w, rect.top() + y1 * h),
+                         QPointF(rect.left() + x2 * w, rect.top() + y2 * h))
+
+    if mode == 'tree':
+        edge(0.5, 0.15, 0.25, 0.5)
+        edge(0.5, 0.15, 0.75, 0.5)
+        edge(0.25, 0.5, 0.12, 0.85)
+        edge(0.25, 0.5, 0.38, 0.85)
+        edge(0.75, 0.5, 0.62, 0.85)
+        edge(0.75, 0.5, 0.88, 0.85)
+        for p in ((0.5, 0.15), (0.25, 0.5), (0.75, 0.5),
+                  (0.12, 0.85), (0.38, 0.85), (0.62, 0.85), (0.88, 0.85)):
+            node(*p)
+    elif mode == 'force':
+        pts = [(0.5, 0.5), (0.18, 0.22), (0.82, 0.28), (0.3, 0.8), (0.76, 0.78)]
+        for a, b in ((0, 1), (0, 2), (0, 3), (0, 4), (1, 3), (2, 4)):
+            edge(*pts[a], *pts[b])
+        for p in pts:
+            node(*p)
+    elif mode == 'concentric':
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for rad in (0.2, 0.4):
+            painter.drawEllipse(QPointF(rect.center()),
+                                rad * w / 2, rad * h / 2)
+        painter.setBrush(color)
+        node(0.5, 0.5)
+        for ang in range(0, 360, 60):
+            rad = math.radians(ang)
+            node(0.5 + 0.2 * math.cos(rad), 0.5 + 0.2 * math.sin(rad))
+        for ang in range(30, 360, 60):
+            rad = math.radians(ang)
+            node(0.5 + 0.4 * math.cos(rad), 0.5 + 0.4 * math.sin(rad))
+    elif mode == 'bfs':
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for y in (0.22, 0.5, 0.78):
+            edge(0.12, y, 0.88, y)
+        painter.setBrush(color)
+        for y, xs in ((0.22, (0.3, 0.7)), (0.5, (0.2, 0.4, 0.6, 0.8)),
+                      (0.78, (0.3, 0.7))):
+            for x in xs:
+                node(x, y)
+    painter.restore()
+
+
+def draw_fit_icon(painter: QPainter, rect: QRectF) -> None:
+    """Draw a magnifier-with-plus glyph (zoom to fit) inside ``rect``."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    color = QColor(139, 148, 158)
+    painter.setPen(QPen(color, 1.6))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    cx = rect.left() + rect.width() * 0.42
+    cy = rect.top() + rect.height() * 0.42
+    r = min(rect.width(), rect.height()) * 0.26
+    painter.drawEllipse(QPointF(cx, cy), r, r)
+    painter.drawLine(QPointF(cx + r * 0.7, cy + r * 0.7),
+                     QPointF(rect.left() + rect.width() * 0.68,
+                             rect.top() + rect.height() * 0.68))
+    painter.drawLine(QPointF(cx - r * 0.55, cy), QPointF(cx + r * 0.55, cy))
+    painter.drawLine(QPointF(cx, cy - r * 0.55), QPointF(cx, cy + r * 0.55))
+    painter.restore()
+
+
 class NodeItem(QGraphicsObject):
     """A device node. Movable, selectable; emits signals on move / double-click."""
 
@@ -361,7 +450,10 @@ class NodeItem(QGraphicsObject):
         painter.setPen(role_color)
         painter.drawText(QPointF(x0, rect.top() + 58), self.device.role.value.upper())
 
-        model = (self.device.model or self.device.vendor or '').strip()
+        model = ' '.join(p for p in (self.device.vendor, self.device.model)
+                         if p and p.strip()).strip()
+        if not model and not self.device.ip and _is_mac(self.device.chassis_id):
+            model = _get_mac_vendor(self.device.chassis_id)
         if model:
             if len(model) > 24:
                 model = model[:23] + '…'
@@ -393,6 +485,8 @@ class EdgeItem(QGraphicsPathItem):
     """
 
     HIT_WIDTH = 10.0
+    SPREAD = 30.0           # perpendicular offset per parallel-link step
+    LABEL_STEP = 18.0       # vertical label stack gap for parallel links
 
     def __init__(self, link: PortLink, source: NodeItem, target: NodeItem, offset: int = 0):
         super().__init__()
@@ -499,17 +593,32 @@ class EdgeItem(QGraphicsPathItem):
             return ''
         return f'{_fmt_rate(iface.in_rate_bps)} ↓ · ↑ {_fmt_rate(iface.out_rate_bps)}'
 
+    def _ctrl(self) -> QPointF:
+        """Control point for the quadratic curve of an offset (parallel) link."""
+        s = self.source.pos()
+        t = self.target.pos()
+        mid = (s + t) / 2
+        if not self.offset:
+            return mid
+        dx, dy = t.x() - s.x(), t.y() - s.y()
+        length = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / length, dx / length
+        return QPointF(mid.x() + nx * self.offset * self.SPREAD,
+                       mid.y() + ny * self.offset * self.SPREAD)
+
+    def _label_pos(self) -> QPointF:
+        """Label anchor, stacked vertically for parallel links so labels stay
+        readable (positive offset → up, negative → down)."""
+        mid = (self.source.pos() + self.target.pos()) / 2
+        mid.setY(mid.y() - self.offset * self.LABEL_STEP)
+        return mid
+
     def update_path(self) -> None:
         s = self.source.pos()
         t = self.target.pos()
         path = QPainterPath(s)
         if self.offset:
-            mid = (s + t) / 2
-            dx, dy = t.x() - s.x(), t.y() - s.y()
-            length = math.hypot(dx, dy) or 1.0
-            nx, ny = -dy / length, dx / length
-            ctrl = QPointF(mid.x() + nx * self.offset * 14, mid.y() + ny * self.offset * 14)
-            path.quadTo(ctrl, t)
+            path.quadTo(self._ctrl(), t)
         else:
             path.lineTo(t)
         self.setPath(path)
@@ -519,9 +628,7 @@ class EdgeItem(QGraphicsPathItem):
         painter.setPen(self._pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(self.path())
-        s = self.source.pos()
-        t = self.target.pos()
-        mid = (s + t) / 2
+        mid = self._label_pos()
         label = f"{self.link.source_port} ⟷ {self.link.target_port}"
         traffic = self.traffic_label()
         painter.setPen(TEXT_DIM)
@@ -724,12 +831,15 @@ class TopologyScene(QGraphicsScene):
             if link.source_id in grouped or link.target_id in grouped:
                 continue
             key = frozenset((link.source_id, link.target_id))
-            offset = seen.get(key, 0)
-            seen[key] = offset + 1 if link.lag else 0
+            n = seen.get(key, 0)
+            seen[key] = n + 1
+            # Spread parallel links symmetrically around the straight line:
+            # 0, +1, -1, +2, -2, … so they fan out evenly on both sides.
+            offset = 0 if n == 0 else ((n + 1) // 2) * (1 if n % 2 == 1 else -1)
             src = self.node_items.get(link.source_id)
             dst = self.node_items.get(link.target_id)
             if src and dst:
-                edge = EdgeItem(link, src, dst, offset=offset if link.lag else 0)
+                edge = EdgeItem(link, src, dst, offset=offset)
                 self.edge_items.append(edge)
                 self.addItem(edge)
 
@@ -749,24 +859,8 @@ class TopologyScene(QGraphicsScene):
         if self.graph is None:
             return
         engine = TopologyEngine()
-        if layout_mode == 'force':
-            node_pos = engine.layout_force(self.graph)
-            group_pos: dict[str, tuple[float, float]] = {}
-            for parent_id, gnode in self.group_items.items():
-                xs: list[float] = []
-                ys: list[float] = []
-                for m in gnode.member_ids:
-                    p = node_pos.get(m)
-                    if p:
-                        xs.append(p[0])
-                        ys.append(p[1])
-                if xs:
-                    group_pos[parent_id] = (sum(xs) / len(xs), sum(ys) / len(ys))
-                else:
-                    pp = node_pos.get(parent_id, (0.0, 0.0))
-                    group_pos[parent_id] = (pp[0], pp[1] + TopologyEngine.SPACING * 1.4)
-        else:
-            node_pos, group_pos = engine.layout_tree(self.graph, self.clusters)
+        method = LAYOUTS.get(layout_mode, 'layout_tree')
+        node_pos, group_pos = getattr(engine, method)(self.graph, self.clusters)
 
         if positions:
             node_pos = apply_layout(self.graph, positions, node_pos)

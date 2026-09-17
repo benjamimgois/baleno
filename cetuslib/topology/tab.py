@@ -27,7 +27,7 @@ from cetuslib.topology.worker import TopologyDiscoveryWorker
 from cetuslib.topology.monitor import TrafficMonitor
 from cetuslib.topology.models import Device, DeviceRole
 from cetuslib.topology.gui.view import (
-    TopologyView, DEVICE_MIME, role_renderer,
+    TopologyView, DEVICE_MIME, role_renderer, draw_layout_icon, draw_fit_icon,
 )
 from cetuslib.topology.gui.detail import DeviceDetailDialog, GroupDevicesDialog
 from cetuslib.topology.persistence import default_map_path
@@ -117,6 +117,59 @@ _PALETTE = [
     (DeviceRole.INTERNET, 'Internet'),
     (DeviceRole.UNKNOWN, 'Unknown'),
 ]
+
+
+class LayoutButton(QToolButton):
+    """An icon button for one layout mode; exclusive via QButtonGroup."""
+
+    def __init__(self, mode: str, label: str, parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self._label = label
+        self.setCheckable(True)
+        self.setFixedSize(62, 50)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f'Layout: {label}')
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isChecked():
+            bg = QColor(40, 60, 120)
+        elif self.underMouse():
+            bg = QColor(28, 33, 40)
+        else:
+            bg = QColor(22, 27, 34)
+        painter.fillRect(self.rect(), bg)
+        draw_layout_icon(painter, self.mode,
+                         QRectF(8, 5, self.width() - 16, self.height() - 22))
+        painter.setPen(QColor(88, 166, 255) if self.isChecked() else QColor(201, 209, 217))
+        painter.setFont(QFont('Sans', 7))
+        painter.drawText(QRectF(0, self.height() - 15, self.width(), 13),
+                         Qt.AlignmentFlag.AlignCenter, self._label)
+        painter.end()
+
+
+class FitButton(QToolButton):
+    """An icon button that fits the map to the current view."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(56, 40)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip('Zoom FIT — fit map to view')
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = QColor(28, 33, 40) if self.underMouse() else QColor(22, 27, 34)
+        painter.fillRect(self.rect(), bg)
+        draw_fit_icon(painter, QRectF(8, 4, self.width() - 16, self.height() - 18))
+        painter.setPen(QColor(201, 209, 217))
+        painter.setFont(QFont('Sans', 7))
+        painter.drawText(QRectF(0, self.height() - 14, self.width(), 12),
+                         Qt.AlignmentFlag.AlignCenter, 'Fit')
+        painter.end()
 
 
 class DevicePaletteButton(QToolButton):
@@ -210,6 +263,7 @@ class TopologyTab(QWidget):
         self.ribbon_stack.addWidget(self._build_discovery_page())
         self.ribbon_stack.addWidget(self._build_devices_page())
         self.ribbon_stack.addWidget(self._build_settings_page())
+        self.ribbon_stack.addWidget(self._build_layouts_page())
         body = QFrame()
         body.setObjectName('ribbonBody')
         body_layout = QVBoxLayout(body)
@@ -237,7 +291,7 @@ class TopologyTab(QWidget):
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
         self.ribbon_btns: dict[int, QPushButton] = {}
-        for index, label in enumerate(('Discovery', 'Objects', 'Settings')):
+        for index, label in enumerate(('Discovery', 'Objects', 'Settings', 'Layouts')):
             btn = QPushButton(label)
             btn.setObjectName('ribbonTab')
             btn.setCheckable(True)
@@ -267,7 +321,8 @@ class TopologyTab(QWidget):
         row0.addWidget(QLabel('Networks:'))
         self.networks_edit = QLineEdit()
         self.networks_edit.setPlaceholderText('10.0.0.0/24, 192.168.1.0/24')
-        row0.addWidget(self.networks_edit, 1)
+        self.networks_edit.setFixedWidth(240)
+        row0.addWidget(self.networks_edit)
         self.discover_btn = QPushButton('Discover')
         self.discover_btn.clicked.connect(self.start_discovery)
         row0.addWidget(self.discover_btn)
@@ -276,23 +331,36 @@ class TopologyTab(QWidget):
         self.progress.setValue(0)
         self.progress.setFixedWidth(160)
         row0.addWidget(self.progress)
+        row0.addSpacing(16)
+        row0.addWidget(QLabel('SNMP:'))
+        self.version_combo = QComboBox()
+        self.version_combo.addItem('v2c', '2c')
+        self.version_combo.addItem('v1', '1')
+        self.version_combo.addItem('v3', '3')
+        self.version_combo.setFixedWidth(72)
+        self.version_combo.currentIndexChanged.connect(self._on_version_changed)
+        row0.addWidget(self.version_combo)
+        row0.addWidget(QLabel('Community:'))
+        self.community_edit = QLineEdit('public')
+        self.community_edit.setFixedWidth(100)
+        self.community_hist_btn = QToolButton()
+        self.community_hist_btn.setText('▾')
+        self.community_hist_btn.setToolTip('Community history (inherited from the SNMP tab)')
+        self.community_hist_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.community_hist_btn.clicked.connect(self._show_community_menu)
+        row0.addWidget(self.community_edit)
+        row0.addWidget(self.community_hist_btn)
         self.status_label = QLabel('Idle')
         self.status_label.setMinimumWidth(120)
         row0.addWidget(self.status_label)
+        row0.addStretch(1)
         layout.addLayout(row0)
 
         row1 = QHBoxLayout()
         row1.setSpacing(8)
-        row1.addWidget(QLabel('Layout:'))
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItem('Hierarchical (tree)', 'hierarchical')
-        self.layout_combo.addItem('Force-directed', 'force')
-        self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
-        row1.addWidget(self.layout_combo)
-        fit_btn = QPushButton('Fit')
-        fit_btn.clicked.connect(self.view.fit_in_view)
-        row1.addWidget(fit_btn)
-        row1.addSpacing(16)
+        self.fit_btn = FitButton()
+        self.fit_btn.clicked.connect(self.view.fit_in_view)
+        row1.addWidget(self.fit_btn)
         row1.addWidget(QLabel('Levels:'))
         self.levels_layout = QHBoxLayout()
         self.levels_layout.setContentsMargins(0, 0, 0, 0)
@@ -302,41 +370,28 @@ class TopologyTab(QWidget):
         layout.addLayout(row1)
         self.level_checkboxes: list[QCheckBox] = []
 
-        row2 = QHBoxLayout()
-        row2.setSpacing(8)
-        row2.addWidget(QLabel('SNMP:'))
-        self.version_combo = QComboBox()
-        self.version_combo.addItem('v2c', '2c')
-        self.version_combo.addItem('v1', '1')
-        self.version_combo.addItem('v3', '3')
-        self.version_combo.currentIndexChanged.connect(self._on_version_changed)
-        row2.addWidget(self.version_combo)
-        row2.addWidget(QLabel('Community:'))
-        self.community_edit = QLineEdit('public')
-        self.community_hist_btn = QToolButton()
-        self.community_hist_btn.setText('▾')
-        self.community_hist_btn.setToolTip('Community history (inherited from the SNMP tab)')
-        self.community_hist_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.community_hist_btn.clicked.connect(self._show_community_menu)
-        row2.addWidget(self.community_edit, 1)
-        row2.addWidget(self.community_hist_btn)
-        row2.addWidget(QLabel('User:'))
+        # SNMPv3 auth fields — only shown when v3 is selected
+        self.v3_row = QWidget()
+        v3_layout = QHBoxLayout(self.v3_row)
+        v3_layout.setContentsMargins(0, 0, 0, 0)
+        v3_layout.setSpacing(8)
+        v3_layout.addWidget(QLabel('User:'))
         self.username_edit = QLineEdit()
-        row2.addWidget(self.username_edit)
-        row2.addWidget(QLabel('Auth:'))
+        v3_layout.addWidget(self.username_edit)
+        v3_layout.addWidget(QLabel('Auth:'))
         self.auth_combo = QComboBox()
         self.auth_combo.addItems(_AUTH_PROTOS)
-        row2.addWidget(self.auth_combo)
+        v3_layout.addWidget(self.auth_combo)
         self.auth_pass_edit = QLineEdit()
         self.auth_pass_edit.setPlaceholderText('auth pass')
         self.auth_pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        row2.addWidget(self.auth_pass_edit)
-        row2.addWidget(QLabel('Priv:'))
+        v3_layout.addWidget(self.auth_pass_edit)
+        v3_layout.addWidget(QLabel('Priv:'))
         self.priv_combo = QComboBox()
         self.priv_combo.addItems(_PRIV_PROTOS)
-        row2.addWidget(self.priv_combo)
-        row2.addStretch(1)
-        layout.addLayout(row2)
+        v3_layout.addWidget(self.priv_combo)
+        v3_layout.addStretch(1)
+        layout.addWidget(self.v3_row)
 
         self._on_version_changed()
         return page
@@ -393,6 +448,32 @@ class TopologyTab(QWidget):
         self._save_feedback_timer.setSingleShot(True)
         self._save_feedback_timer.setInterval(2500)
         self._save_feedback_timer.timeout.connect(self._clear_save_feedback)
+        return page
+
+    # ── Layouts page ─────────────────────────────────────────────────────
+
+    def _build_layouts_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.layout_buttons: list[LayoutButton] = []
+        self.layout_group = QButtonGroup(self)
+        self.layout_group.setExclusive(True)
+        for mode, label in (('hierarchical', 'Tree'), ('force', 'Force'),
+                            ('concentric', 'Radial'), ('bfs', 'BFS')):
+            btn = LayoutButton(mode, label)
+            self.layout_group.addButton(btn)
+            self.layout_buttons.append(btn)
+            row.addWidget(btn)
+        row.addStretch(1)
+        self.layout_buttons[0].setChecked(True)
+        self.layout_group.buttonClicked.connect(self._on_layout_clicked)
+        layout.addLayout(row)
+        layout.addStretch(1)
         return page
 
     def _save_map(self) -> None:
@@ -470,7 +551,7 @@ class TopologyTab(QWidget):
 
     def _on_finished(self, graph) -> None:
         self._graph = graph
-        self.view.load(graph, self.layout_combo.currentData())
+        self.view.load(graph, self._current_layout())
         self._rebuild_level_filters(graph)
         self.status_label.setText(
             f'{len(graph.devices)} nodes · {len(graph.links)} links · '
@@ -485,9 +566,13 @@ class TopologyTab(QWidget):
 
     # ── interactions ─────────────────────────────────────────────────────
 
-    def _on_layout_changed(self) -> None:
+    def _current_layout(self) -> str:
+        checked = self.layout_group.checkedButton()
+        return checked.mode if checked is not None else 'hierarchical'
+
+    def _on_layout_clicked(self, button) -> None:
         if self._graph is not None:
-            self.view.switch_layout(self.layout_combo.currentData())
+            self.view.switch_layout(button.mode)
 
     def _rebuild_level_filters(self, graph) -> None:
         while self.levels_layout.count():
@@ -570,9 +655,8 @@ class TopologyTab(QWidget):
     def _on_version_changed(self) -> None:
         is_v3 = self.version_combo.currentData() == '3'
         self.community_edit.setEnabled(not is_v3)
-        for w in (self.username_edit, self.auth_combo, self.auth_pass_edit,
-                  self.priv_combo):
-            w.setEnabled(is_v3)
+        self.community_hist_btn.setEnabled(not is_v3)
+        self.v3_row.setVisible(is_v3)
 
     # ── persistence of UI preferences ────────────────────────────────────
 

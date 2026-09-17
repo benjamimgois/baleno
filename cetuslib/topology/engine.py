@@ -18,7 +18,7 @@ from cetuslib.topology.models import (
     Device, DeviceRole, LldpNeighbor, PortLink, TopologyGraph,
 )
 
-__all__ = ['TopologyEngine']
+__all__ = ['TopologyEngine', 'LAYOUTS']
 
 try:
     import networkx as nx
@@ -449,18 +449,20 @@ class TopologyEngine:
                 )
         return pos
 
-    def layout_force(self, g: TopologyGraph,
-                     iterations: int = 300) -> dict[str, tuple[float, float]]:
-        """Force-directed (Fruchterman–Reingold) layout."""
+    def layout_force(self, g: TopologyGraph, clusters=None,
+                     iterations: int = 300) -> tuple[dict[str, tuple[float, float]],
+                                                     dict[str, tuple[float, float]]]:
+        """Force-directed (Fruchterman–Reingold) layout, plus group positions."""
         if not g.devices:
-            return {}
+            return {}, {}
         if HAS_NETWORKX:
             nxg = nx.Graph()
             nxg.add_nodes_from(g.devices)
             nxg.add_edges_from((l.source_id, l.target_id) for l in g.links)
             try:
                 pos = nx.spring_layout(nxg, seed=42, iterations=iterations)
-                return {n: (x * 400, y * 400) for n, (x, y) in pos.items()}
+                pos = {n: (x * 400, y * 400) for n, (x, y) in pos.items()}
+                return pos, self._group_positions(g, clusters, pos)
             except Exception:
                 pass
 
@@ -506,7 +508,98 @@ class TopologyEngine:
                 pos[node] = (pos[node][0] + disp[node][0] / d * capped,
                              pos[node][1] + disp[node][1] / d * capped)
             t = max(t * 0.95, 1.0)
-        return pos
+        return pos, self._group_positions(g, clusters, pos)
+
+    def layout_concentric(self, g: TopologyGraph, clusters=None
+                          ) -> tuple[dict[str, tuple[float, float]],
+                                     dict[str, tuple[float, float]]]:
+        """Concentric layout: roots at the centre, devices on rings by hop level."""
+        if not g.devices:
+            return {}, {}
+        clusters = clusters or {}
+        grouped: set[str] = {m for members in clusters.values() for m in members}
+
+        adj: dict[str, list[str]] = defaultdict(list)
+        for link in g.links:
+            adj[link.source_id].append(link.target_id)
+            adj[link.target_id].append(link.source_id)
+
+        roots = self._pick_roots(g, adj)
+
+        # hop level (distance from any root); unreachable → outermost ring
+        level: dict[str, int] = {}
+        q = deque(roots)
+        for r in roots:
+            level[r] = 0
+        while q:
+            node = q.popleft()
+            for nb in adj[node]:
+                if nb in level:
+                    continue
+                level[nb] = level[node] + 1
+                q.append(nb)
+        max_level = max(level.values(), default=0) or 1
+
+        pos: dict[str, tuple[float, float]] = {}
+        spacing = self.SPACING
+
+        n_roots = len(roots)
+        if n_roots == 1:
+            pos[roots[0]] = (0.0, 0.0)
+        else:
+            r0 = spacing * 0.35
+            for i, r in enumerate(sorted(roots, key=lambda n: g.devices[n].label)):
+                ang = 2 * math.pi * i / n_roots
+                pos[r] = (r0 * math.cos(ang), r0 * math.sin(ang))
+
+        rings: dict[int, list[str]] = defaultdict(list)
+        for d in g.devices:
+            if d in grouped or d in pos:
+                continue
+            lvl = level.get(d, max_level + 1)
+            rings[lvl if lvl > 0 else max_level + 1].append(d)
+
+        for lvl, nodes in rings.items():
+            nodes_sorted = sorted(nodes, key=lambda n: g.devices[n].label)
+            radius = spacing * lvl
+            n = len(nodes_sorted)
+            for i, node in enumerate(nodes_sorted):
+                ang = 2 * math.pi * i / n
+                pos[node] = (radius * math.cos(ang), radius * math.sin(ang))
+
+        return pos, self._group_positions(g, clusters, pos)
+
+    def layout_bfs_tree(self, g: TopologyGraph, clusters=None
+                        ) -> tuple[dict[str, tuple[float, float]],
+                                   dict[str, tuple[float, float]]]:
+        """Breadth-first tree layout, with group positions for collapsed clusters."""
+        if not g.devices:
+            return {}, {}
+        clusters = clusters or {}
+        grouped: set[str] = {m for members in clusters.values() for m in members}
+        pos = self._layout_by_bfs(g, grouped)
+        return pos, self._group_positions(g, clusters, pos)
+
+    @staticmethod
+    def _group_positions(g: TopologyGraph, clusters,
+                         pos: dict[str, tuple[float, float]]
+                         ) -> dict[str, tuple[float, float]]:
+        """Position collapsed groups by averaging their members' coordinates."""
+        group_pos: dict[str, tuple[float, float]] = {}
+        for parent_id, member_ids in (clusters or {}).items():
+            xs: list[float] = []
+            ys: list[float] = []
+            for m in member_ids:
+                p = pos.get(m)
+                if p:
+                    xs.append(p[0])
+                    ys.append(p[1])
+            if xs:
+                group_pos[parent_id] = (sum(xs) / len(xs), sum(ys) / len(ys))
+            else:
+                pp = pos.get(parent_id, (0.0, 0.0))
+                group_pos[parent_id] = (pp[0], pp[1] + TopologyEngine.SPACING * 1.4)
+        return group_pos
 
     @staticmethod
     def _pick_roots(g: TopologyGraph, adj: dict[str, list[str]]) -> list[str]:
@@ -517,3 +610,13 @@ class TopologyEngine:
         if g.devices:
             return sorted(g.devices, key=lambda n: len(adj[n]), reverse=True)[:1]
         return []
+
+
+# Registry of layout modes → method name on TopologyEngine.  Each entry must
+# accept ``(graph, clusters)`` and return ``(node_pos, group_pos)``.
+LAYOUTS = {
+    'hierarchical': 'layout_tree',
+    'force': 'layout_force',
+    'concentric': 'layout_concentric',
+    'bfs': 'layout_bfs_tree',
+}
