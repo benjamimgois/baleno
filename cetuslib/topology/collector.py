@@ -205,103 +205,92 @@ class LldpCollector:
         import asyncio
         return asyncio.run(self.collect_async(host))
 
-    def poll(self, host: str) -> dict:
-        """Synchronous perf poll: CPU, memory and per-interface octet counters."""
-        import asyncio
-        return asyncio.run(self.poll_async(host))
+    # ── reusable session helpers (live monitoring) ─────────────────────────
 
-    def poll_status(self, host: str) -> dict[int, str]:
-        """Synchronous light poll: interface oper-status (IF-MIB ifOperStatus)."""
-        import asyncio
-        return asyncio.run(self.poll_status_async(host))
+    async def open_session(self, host: str):
+        """Create a reusable ``(engine, auth, target)`` session for ``host``.
 
-    async def poll_status_async(self, host: str) -> dict[int, str]:
-        """Return ``{ifIndex: 'up'|'down'|'unknown'}`` for one host.
+        The engine and transport are meant to live for many poll cycles (the
+        intended long-lived usage of the ``v3arch.asyncio`` backend); call
+        :meth:`close_session` once when done.
+        """
+        from pysnmp.hlapi.v3arch.asyncio import SnmpEngine, UdpTransportTarget
+        engine = SnmpEngine()
+        target = await UdpTransportTarget.create(
+            (host, self.port), timeout=self.timeout, retries=self.retries)
+        auth = self._auth_data()
+        return engine, auth, target
+
+    @staticmethod
+    def close_session(engine) -> None:
+        try:
+            engine.close_dispatcher()
+        except Exception:
+            pass
+
+    async def probe(self, engine, auth, target) -> bool:
+        """Return True if the host answers SNMP (single cheap GET)."""
+        try:
+            return await self._get(engine, auth, target, OID_LOC_CHASSIS_ID) is not None
+        except Exception:
+            return False
+
+    async def poll_counters_async(self, engine, auth, target) -> dict[int, list[int]]:
+        """Return ``{ifIndex: [in_octets, out_octets]}`` (64-bit HC preferred).
+
+        Reads only the octet counters — no CPU/memory walks — so it is cheap
+        enough to run on the fast traffic cadence.
+        """
+        return await self._read_counters(engine, auth, target)
+
+    async def poll_cpu_mem_async(self, engine, auth, target) -> tuple:
+        """Return ``(cpu_percent, memory_percent)``; None when unavailable."""
+        return await self._read_cpu_mem(engine, auth, target)
+
+    async def poll_status_async(self, engine, auth, target) -> dict[int, str]:
+        """Return ``{ifIndex: 'up'|'down'|'unknown'}`` using a live session.
 
         Lighter than :meth:`collect` — walks a single column so the live
         topology monitor can re-check port state on a longer cadence.
         """
-        from pysnmp.hlapi.v3arch.asyncio import SnmpEngine, UdpTransportTarget
-        engine = SnmpEngine()
         statuses: dict[int, str] = {}
-        try:
-            target = await UdpTransportTarget.create(
-                (host, self.port), timeout=self.timeout, retries=self.retries)
-            auth = self._auth_data()
-            for oid, val in await self._walk(engine, auth, target, OID_IF_OPER_STATUS):
-                try:
-                    idx = int(_oid_suffix(oid, OID_IF_OPER_STATUS)[-1])
-                except (IndexError, ValueError):
-                    continue
-                statuses[idx] = ('up' if val == '1'
-                                 else 'down' if val == '2' else 'unknown')
-        except Exception:
-            pass
-        finally:
-            engine.close_dispatcher()
+        for oid, val in await self._walk(engine, auth, target, OID_IF_OPER_STATUS):
+            try:
+                idx = int(_oid_suffix(oid, OID_IF_OPER_STATUS)[-1])
+            except (IndexError, ValueError):
+                continue
+            statuses[idx] = ('up' if val == '1'
+                             else 'down' if val == '2' else 'unknown')
         return statuses
 
-    def poll_speed(self, host: str) -> dict[int, float]:
-        """Synchronous light poll: interface speed (ifHighSpeed, ifSpeed fallback)."""
-        import asyncio
-        return asyncio.run(self.poll_speed_async(host))
-
-    async def poll_speed_async(self, host: str) -> dict[int, float]:
-        """Return ``{ifIndex: Mbps}`` for one host.
+    async def poll_speed_async(self, engine, auth, target) -> dict[int, float]:
+        """Return ``{ifIndex: Mbps}`` using a live session.
 
         Prefers ifHighSpeed (Mbps); falls back to ifSpeed (bps / 1e6) when the
         high-speed column is absent (older agents without ifXTable).
         """
-        from pysnmp.hlapi.v3arch.asyncio import SnmpEngine, UdpTransportTarget
-        engine = SnmpEngine()
         speeds: dict[int, float] = {}
-        try:
-            target = await UdpTransportTarget.create(
-                (host, self.port), timeout=self.timeout, retries=self.retries)
-            auth = self._auth_data()
-            rows = await self._walk(engine, auth, target, OID_IF_HIGH_SPEED)
-            base = OID_IF_HIGH_SPEED
-            if not rows:
-                rows = await self._walk(engine, auth, target, OID_IF_SPEED)
-                base = OID_IF_SPEED
-            for oid, val in rows:
-                try:
-                    idx = int(_oid_suffix(oid, base)[-1])
-                except (IndexError, ValueError):
-                    continue
-                try:
-                    speed = float(val)
-                except ValueError:
-                    continue
-                if base == OID_IF_HIGH_SPEED:
-                    speeds[idx] = speed
-                elif speed < 2 ** 31:
-                    # ifSpeed is a 32-bit counter; anything near/above 2^31 is a
-                    # wrapped (or sentinel) value from a >1G link — untrustworthy.
-                    speeds[idx] = speed / 1e6
-        except Exception:
-            pass
-        finally:
-            engine.close_dispatcher()
+        rows = await self._walk(engine, auth, target, OID_IF_HIGH_SPEED)
+        base = OID_IF_HIGH_SPEED
+        if not rows:
+            rows = await self._walk(engine, auth, target, OID_IF_SPEED)
+            base = OID_IF_SPEED
+        for oid, val in rows:
+            try:
+                idx = int(_oid_suffix(oid, base)[-1])
+            except (IndexError, ValueError):
+                continue
+            try:
+                speed = float(val)
+            except ValueError:
+                continue
+            if base == OID_IF_HIGH_SPEED:
+                speeds[idx] = speed
+            elif speed < 2 ** 31:
+                # ifSpeed is a 32-bit counter; anything near/above 2^31 is a
+                # wrapped (or sentinel) value from a >1G link — untrustworthy.
+                speeds[idx] = speed / 1e6
         return speeds
-
-    async def poll_async(self, host: str) -> dict:
-        from pysnmp.hlapi.v3arch.asyncio import (
-            SnmpEngine, UdpTransportTarget,
-        )
-        engine = SnmpEngine()
-        result: dict = {'cpu': None, 'memory': None, 'counters': {}}
-        try:
-            target = await UdpTransportTarget.create(
-                (host, self.port), timeout=self.timeout, retries=self.retries)
-            auth = self._auth_data()
-            result['cpu'], result['memory'] = await self._read_cpu_mem(engine, auth, target)
-            result['counters'] = await self._read_counters(engine, auth, target)
-        except Exception:
-            pass
-        finally:
-            engine.close_dispatcher()
-        return result
 
     async def collect_async(self, host: str) -> Device:
         from pysnmp.hlapi.v3arch.asyncio import (

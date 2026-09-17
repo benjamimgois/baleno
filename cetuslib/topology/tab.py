@@ -222,6 +222,8 @@ class TopologyTab(QWidget):
             self._graph = self.view._scene.graph
             self._rebuild_level_filters(self._graph)
         self._load_remembered()
+        if self._graph is not None:
+            self._start_monitor(self._graph)
         QApplication.instance().aboutToQuit.connect(self.shutdown)
 
     # ── ribbon tab bar ───────────────────────────────────────────────────
