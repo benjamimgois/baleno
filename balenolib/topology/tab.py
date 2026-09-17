@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 from balenolib.topology.collector import SnmpCredentials
 from balenolib.topology.worker import TopologyDiscoveryWorker
 from balenolib.topology.monitor import TrafficMonitor
-from balenolib.topology.models import Device, DeviceRole
+from balenolib.topology.models import Device, DeviceRole, TopologyGraph
 from balenolib.topology.gui.view import (
     TopologyView, DEVICE_MIME, role_renderer, draw_layout_icon, draw_fit_icon,
     draw_link_icon, GroupNodeItem,
@@ -359,6 +359,11 @@ class TopologyTab(QWidget):
         self.networks_edit.setPlaceholderText('10.0.0.0/24, 192.168.1.0/24')
         self.networks_edit.setFixedWidth(240)
         row0.addWidget(self.networks_edit)
+        row0.addWidget(QLabel('Layer:'))
+        self.layer_name_edit = QLineEdit()
+        self.layer_name_edit.setPlaceholderText('Rede-A')
+        self.layer_name_edit.setFixedWidth(100)
+        row0.addWidget(self.layer_name_edit)
         self.discover_btn = QPushButton('Discover')
         self.discover_btn.clicked.connect(self.start_discovery)
         row0.addWidget(self.discover_btn)
@@ -559,17 +564,18 @@ class TopologyTab(QWidget):
 
         self._remember()
         creds = self._credentials()
+        layer_name = self.layer_name_edit.text().strip()
         self._worker = TopologyDiscoveryWorker(
             networks, creds,
             communities=self._community_list(),
             config=self._config,
+            layer_name=layer_name,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.device_found.connect(self._on_device_found)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._worker.deleteLater)
-        self.view.clear_scene()
         self._live_devices: dict[str, Device] = {}
         self.discover_btn.setEnabled(False)
         self.progress.setValue(0)
@@ -589,15 +595,42 @@ class TopologyTab(QWidget):
         self._live_devices[device.id] = device
 
     def _on_finished(self, graph) -> None:
-        self._graph = graph
-        self.view.load(graph, self._current_layout())
-        self._rebuild_level_filters(graph)
-        self.status_label.setText(
-            f'{len(graph.devices)} nodes · {len(graph.links)} links · '
-            f'{len(graph.orphans)} orphans')
-        self.discover_btn.setEnabled(True)
-        self._start_monitor(graph)
-        self.view.save_map()
+        try:
+            self._stop_monitor()
+            if self._graph is None:
+                self._graph = graph
+                new_ids = set(graph.devices.keys())
+            else:
+                new_ids = set(graph.devices.keys()) - set(self._graph.devices.keys())
+                self._merge_graphs(self._graph, graph)
+            self.view.load_merged(self._graph, new_ids, self._current_layout())
+            self._rebuild_level_filters(self._graph)
+            self.status_label.setText(
+                f'{len(self._graph.devices)} nodes · {len(self._graph.links)} links · '
+                f'{len(self._graph.orphans)} orphans')
+            self.discover_btn.setEnabled(True)
+            self._start_monitor(self._graph)
+            self.view.save_map()
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            self.status_label.setText(f'Error merging discovery: {exc}')
+            self.discover_btn.setEnabled(True)
+
+    def _merge_graphs(self, target: TopologyGraph, incoming: TopologyGraph) -> None:
+        """Merge ``incoming`` into ``target`` in place, deduplicating devices by id."""
+        for did, dev in incoming.devices.items():
+            existing = target.devices.get(did)
+            if existing is None:
+                target.devices[did] = dev
+            else:
+                existing.layers |= dev.layers
+                for idx, iface in dev.interfaces.items():
+                    if idx not in existing.interfaces:
+                        existing.interfaces[idx] = iface
+        for link in incoming.links:
+            if not any(link.key() == l.key() for l in target.links):
+                target.links.append(link)
 
     def _on_failed(self, message: str) -> None:
         self.status_label.setText(f'Error: {message}')
@@ -621,31 +654,29 @@ class TopologyTab(QWidget):
                 widget.deleteLater()
         self.level_checkboxes = []
 
-        hidden = self._hidden_levels()
-        max_level = max((d.layer for d in graph.devices.values()), default=0)
-        for lvl in range(1, max_level + 1):
-            cb = QCheckBox(f'L{lvl}')
-            cb.setChecked(lvl not in hidden)
-            cb.setToolTip(f'Show level {lvl} devices')
-            cb.toggled.connect(self._apply_level_filter)
+        hidden = self._hidden_layers()
+        layers = sorted({layer for d in graph.devices.values() for layer in d.layers})
+        for layer in layers:
+            cb = QCheckBox(layer)
+            cb.setChecked(layer not in hidden)
+            cb.setToolTip(f'Show/hide layer {layer}')
+            cb.toggled.connect(self._apply_layer_filter)
             self.levels_layout.addWidget(cb)
             self.level_checkboxes.append(cb)
         self.levels_layout.addStretch(1)
-        self._apply_level_filter()
+        self._apply_layer_filter()
 
-    def _hidden_levels(self) -> set[int]:
+    def _hidden_layers(self) -> set[str]:
         try:
-            return set(json.loads(self._config.get('topology_hidden_levels') or '[]'))
+            return set(json.loads(self._config.get('topology_hidden_layers') or '[]'))
         except (ValueError, TypeError):
             return set()
 
-    def _apply_level_filter(self) -> None:
-        active = {i + 1 for i, cb in enumerate(self.level_checkboxes)
-                  if cb.isChecked()}
-        hidden = [i + 1 for i, cb in enumerate(self.level_checkboxes)
-                  if not cb.isChecked()]
-        self._config.set('topology_hidden_levels', json.dumps(hidden))
-        self.view.set_visible_levels(active)
+    def _apply_layer_filter(self) -> None:
+        visible = {cb.text() for cb in self.level_checkboxes if cb.isChecked()}
+        hidden = [cb.text() for cb in self.level_checkboxes if not cb.isChecked()]
+        self._config.set('topology_hidden_layers', json.dumps(hidden))
+        self.view.set_visible_layers(visible)
 
     def _on_node_double_clicked(self, device) -> None:
         dialog = DeviceDetailDialog(device, self)
@@ -788,7 +819,21 @@ class TopologyTab(QWidget):
         self._monitor.start()
 
     def _stop_monitor(self) -> None:
-        if self._monitor is not None:
-            self._monitor.stop()
-            self._monitor.wait(3000)
-            self._monitor = None
+        if self._monitor is None:
+            return
+        mon = self._monitor
+        self._monitor = None
+        # Detach from the view so a still-running monitor can't touch the scene
+        # while it is being merged/rebuild during the next discovery.
+        for sig in (mon.updated, mon.status_updated, mon.speed_updated):
+            try:
+                sig.disconnect()
+            except TypeError:
+                pass
+        mon.stop()
+        if not mon.wait(3000):
+            # Still running (mid-SNMP): schedule deletion on finish instead of
+            # destroying a live QThread (which aborts the application).
+            mon.finished.connect(mon.deleteLater)
+        else:
+            mon.deleteLater()

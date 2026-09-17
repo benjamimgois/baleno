@@ -93,6 +93,7 @@ class Device:
     interfaces: dict[int, Interface] = field(default_factory=dict)
     lldp_neighbors: list[LldpNeighbor] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
+    layers: set[str] = field(default_factory=set)  # named map layers (visibility groups)
 
     @property
     def label(self) -> str:
@@ -125,6 +126,7 @@ class Device:
             'chassis_id': self.chassis_id,
             'status': self.status,
             'layer': self.layer,
+            'layers': sorted(self.layers),
             'interfaces': interfaces,
         }
 
@@ -144,6 +146,7 @@ class Device:
             chassis_id=str(data.get('chassis_id', '') or ''),
             status=str(data.get('status', 'unknown') or 'unknown'),
             layer=int(data.get('layer', 0) or 0),
+            layers=set(data.get('layers') or []),
         )
         for idx_str, ifdata in (data.get('interfaces') or {}).items():
             try:

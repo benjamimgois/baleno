@@ -961,6 +961,33 @@ class TopologyScene(QGraphicsScene):
         for glink in self.group_links:
             glink.setVisible(glink.source.device.layer in levels and 2 in levels)
 
+    def set_visible_layers(self, visible_layers: Optional[set]) -> None:
+        """Show only devices belonging to the given named layers.
+
+        ``None`` shows everything.  A device with no layers (manual/legacy) is
+        always visible; a device with layers is visible when at least one of its
+        layers is in ``visible_layers``.  Edges follow their endpoints.
+        """
+        if visible_layers is None:
+            for item in self.node_items.values():
+                item.setVisible(True)
+            for edge in self.edge_items:
+                edge.setVisible(True)
+            for gnode in self.group_items.values():
+                gnode.setVisible(True)
+            for glink in self.group_links:
+                glink.setVisible(True)
+            return
+        for node in self.node_items.values():
+            layers = node.device.layers
+            node.setVisible((not layers) or bool(layers & visible_layers))
+        for edge in self.edge_items:
+            edge.setVisible(edge.source.isVisible() and edge.target.isVisible())
+        for gnode in self.group_items.values():
+            gnode.setVisible(True)
+        for glink in self.group_links:
+            glink.setVisible(glink.source.isVisible())
+
     def _add_node(self, device: Device, pos: QPointF) -> NodeItem:
         node = NodeItem(device)
         node.setPos(pos)
@@ -1458,6 +1485,40 @@ class TopologyView(QGraphicsView):
             gnode.moved.connect(self._schedule_save)
         self.fit_in_view()
 
+    def load_merged(self, graph: TopologyGraph, new_ids: set,
+                    layout_mode: str = 'hierarchical') -> None:
+        """Rebuild the scene after a discovery merge.
+
+        Existing devices keep their current positions; newly discovered devices
+        (``new_ids``) are laid out by the engine and shifted to the right of the
+        existing bounding box.
+        """
+        old_positions = {did: pos for did, pos in self.current_positions().items()
+                         if did not in new_ids}
+        old_groups = self.current_group_positions()
+        self._scene.set_graph(graph, layout_mode, old_positions, old_groups)
+        self._offset_new_devices(new_ids, old_positions)
+        for item in self._scene.node_items.values():
+            item.moved.connect(self._schedule_save)
+        for gnode in self._scene.group_items.values():
+            gnode.moved.connect(self._schedule_save)
+        self.fit_in_view()
+
+    def _offset_new_devices(self, new_ids: set,
+                            old_positions: dict[str, tuple[float, float]]) -> None:
+        """Shift newly discovered nodes to the right of the existing bbox."""
+        if not new_ids or not old_positions:
+            return
+        new_nodes = [self._scene.node_items[d] for d in new_ids
+                     if d in self._scene.node_items]
+        if not new_nodes:
+            return
+        old_right = max(p[0] for p in old_positions.values())
+        new_left = min(n.pos().x() for n in new_nodes)
+        dx = (old_right + 260.0) - new_left
+        for n in new_nodes:
+            n.setPos(n.pos().x() + dx, n.pos().y())
+
     def fit_in_view(self) -> None:
         rect = self._scene.itemsBoundingRect()
         if rect.isValid():
@@ -1467,6 +1528,11 @@ class TopologyView(QGraphicsView):
     def set_visible_levels(self, levels: Optional[set]) -> None:
         """Filter the canvas to the given hop levels (None = show all)."""
         self._scene.set_visible_levels(levels)
+        self._fit_visible()
+
+    def set_visible_layers(self, layers: Optional[set]) -> None:
+        """Filter the canvas to the given named layers (None = show all)."""
+        self._scene.set_visible_layers(layers)
         self._fit_visible()
 
     def _fit_visible(self) -> None:

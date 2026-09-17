@@ -107,9 +107,13 @@ class TrafficMonitor(QThread):
                 self._sessions[device.id] = session
 
     async def _setup_session(self, device: Device):
+        if self._stop:
+            return None
         creds = self.credentials
         if creds.version in ('1', '2c') and self.communities:
             for community in self._ordered_communities(device.ip):
+                if self._stop:
+                    return None
                 collector = LldpCollector(
                     replace(creds, community=community), timeout=self.timeout)
                 try:

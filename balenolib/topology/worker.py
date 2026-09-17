@@ -46,13 +46,14 @@ class TopologyDiscoveryWorker(QThread):
 
     def __init__(self, networks: list[str], credentials: SnmpCredentials,
                  communities: Optional[list[str]] = None, config=None,
-                 max_devices: int = 250, parent=None):
+                 max_devices: int = 250, layer_name: str = '', parent=None):
         super().__init__(parent)
         self.networks = networks
         self.credentials = credentials
         self.communities = list(communities) if communities else None
         self.config = config
         self.max_devices = max_devices
+        self.layer_name = layer_name
         self._stop = False
         self._scanner: Optional[PingScanner] = None
 
@@ -126,11 +127,25 @@ class TopologyDiscoveryWorker(QThread):
 
             self.progress.emit(90, "Building topology graph…")
             graph = TopologyEngine().build(devices, seed_networks=self.networks)
+            self._assign_layers(graph)
             self.progress.emit(100, f"Done — {len(graph.devices)} nodes, "
                                     f"{len(graph.links)} links")
             self.finished.emit(graph)
         except Exception as exc:
             self.failed.emit(str(exc))
+
+    def _assign_layers(self, graph) -> None:
+        """Tag every device with a named layer derived from the discovery name.
+
+        Seeds (hop 1) get ``<name>``; LLDP neighbours at hop N get
+        ``<name>-<N>`` (real depth preserved).
+        """
+        name = self.layer_name or (self.networks[0].split('/')[0] if self.networks else 'map')
+        for device in graph.devices.values():
+            if device.layer <= 1:
+                device.layers.add(name)
+            else:
+                device.layers.add(f'{name}-{device.layer}')
 
     # ── SNMP collection with community fallback ──────────────────────────
 
