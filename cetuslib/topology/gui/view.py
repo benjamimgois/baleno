@@ -1001,7 +1001,7 @@ class TopologyView(QGraphicsView):
             'padding:5px 8px; border:1px solid #30363d; border-radius:4px;">'
             '<span style="color:#3FB950;">●</span> 10G+ &nbsp;&nbsp;'
             '<span style="color:#58A6FF;">●</span> 1G &nbsp;&nbsp;'
-            '<span style="color:#E67E22;">●</span> &lt;1G &nbsp;&nbsp;'
+            '<span style="color:#E67E22;">●</span> 100M &nbsp;&nbsp;'
             '<span style="color:#8B949E;">●</span> ? &nbsp;&nbsp;'
             '<span style="color:#F85149;">━</span> down</span>')
         self._legend.adjustSize()

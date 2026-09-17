@@ -173,6 +173,39 @@ class SerialTerminalGUI(QMainWindow):
 
         icon_size = 36
 
+        # Topology tab button (index 10) — network mapping (first in sidebar)
+        self.topology_tab_btn = QToolButton()
+        self.topology_tab_btn.setText('Topology')
+        self.topology_tab_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.topology_tab_btn.setFixedSize(62, 62)
+        topology_icon_path = self.get_tab_icon_path('topology.svg')
+        topology_icon = load_svg_icon(topology_icon_path, icon_size) if topology_icon_path else None
+        if topology_icon:
+            self.topology_tab_btn.setIcon(topology_icon)
+            self.topology_tab_btn.setIconSize(QSize(30, 30))
+        else:
+            self.topology_tab_btn.setIcon(self.style().standardIcon(
+                self.style().StandardPixmap.SP_FileDialogListView))
+        self.topology_tab_btn.setToolTip("Topology\nDiscover and map network topology")
+        self.topology_tab_btn.setCheckable(True)
+        self.topology_tab_btn.setChecked(True)
+        self.topology_tab_btn.clicked.connect(lambda: self.switch_tab(10))
+        _tool_btn_style = tab_btn_style.replace('QPushButton', 'QToolButton')
+        self.topology_tab_btn.setStyleSheet(
+            _tool_btn_style.format(color='#4169E1') +
+            """
+            QToolButton {
+                font-size: 7pt;
+                font-weight: normal;
+                padding: 2px 0px;
+                color: #aaaaaa;
+            }
+            QToolButton:checked {
+                color: white;
+            }
+            """)
+        tab_layout.addWidget(self.topology_tab_btn)
+
         # TFTP tab button
         self.tftp_tab_btn = QPushButton()
         self.tftp_tab_btn.setFixedSize(62, 52)
@@ -218,7 +251,6 @@ class SerialTerminalGUI(QMainWindow):
                 self.style().StandardPixmap.SP_ComputerIcon))
         self.ssh_tab_btn.setToolTip("Remote Access")
         self.ssh_tab_btn.setCheckable(True)
-        self.ssh_tab_btn.setChecked(True)
         self.ssh_tab_btn.clicked.connect(lambda: self.switch_tab(0))
         self.ssh_tab_btn.setStyleSheet(tab_btn_style.format(color='#4CAF50'))
 
@@ -358,38 +390,6 @@ class SerialTerminalGUI(QMainWindow):
             """)
         tab_layout.addWidget(self.automation_tab_btn)
 
-        # Topology tab button (index 10) — network mapping
-        self.topology_tab_btn = QToolButton()
-        self.topology_tab_btn.setText('Topology')
-        self.topology_tab_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.topology_tab_btn.setFixedSize(62, 62)
-        topology_icon_path = self.get_tab_icon_path('topology.svg')
-        topology_icon = load_svg_icon(topology_icon_path, icon_size) if topology_icon_path else None
-        if topology_icon:
-            self.topology_tab_btn.setIcon(topology_icon)
-            self.topology_tab_btn.setIconSize(QSize(30, 30))
-        else:
-            self.topology_tab_btn.setIcon(self.style().standardIcon(
-                self.style().StandardPixmap.SP_FileDialogListView))
-        self.topology_tab_btn.setToolTip("Topology\nDiscover and map network topology")
-        self.topology_tab_btn.setCheckable(True)
-        self.topology_tab_btn.clicked.connect(lambda: self.switch_tab(10))
-        _tool_btn_style = tab_btn_style.replace('QPushButton', 'QToolButton')
-        self.topology_tab_btn.setStyleSheet(
-            _tool_btn_style.format(color='#4169E1') +
-            """
-            QToolButton {
-                font-size: 7pt;
-                font-weight: normal;
-                padding: 2px 0px;
-                color: #aaaaaa;
-            }
-            QToolButton:checked {
-                color: white;
-            }
-            """)
-        tab_layout.addWidget(self.topology_tab_btn)
-
         tab_layout.addStretch()
 
         # Settings button (bottom of sidebar)
@@ -477,6 +477,9 @@ class SerialTerminalGUI(QMainWindow):
         # Update port list
         self.update_port_list()
 
+        # Topology is the initial tab
+        self.content_stack.setCurrentIndex(10)
+
     def switch_tab(self, index):
         """Switch between tabs."""
         self.content_stack.setCurrentIndex(index)
@@ -491,8 +494,8 @@ class SerialTerminalGUI(QMainWindow):
         self.traffic_tab_btn.setChecked(index == 8)
         self.automation_tab_btn.setChecked(index == 9)
         self.topology_tab_btn.setChecked(index == 10)
-        modes = {0: 'ssh', 1: 'serial', 2: 'ipscan', 3: 'snmp',
-                 4: 'traceroute', 5: 'wifi', 6: 'iperf', 7: 'tftp', 8: 'traffic',
+        modes = {0: 'ssh', 1: 'serial', 2: 'ipscan', 3: 'traceroute',
+                 4: 'snmp', 5: 'wifi', 6: 'iperf', 7: 'tftp', 8: 'traffic',
                  9: 'automation', 10: 'topology'}
         self.config.set('connection_mode', modes.get(index, 'ssh'))
 
