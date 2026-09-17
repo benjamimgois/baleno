@@ -190,7 +190,7 @@ class TopologyActions:
         remove_act = None
         if include_remove:
             menu.addSeparator()
-            remove_act = menu.addAction('Remover')
+            remove_act = menu.addAction('Remove')
             remove_act.setIcon(TopologyActions._trash_icon())
 
         chosen = menu.exec(pos)

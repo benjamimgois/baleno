@@ -173,6 +173,7 @@ class PortLink:
     status: str = 'up'
     override_status: Optional[str] = None   # None=auto | 'up' | 'down'
     override_speed: Optional[float] = None  # None=auto | Mbps
+    manual: bool = False             # created manually by the operator
 
     def key(self) -> tuple:
         """Order-independent key for deduplication."""
@@ -200,6 +201,7 @@ class PortLink:
             'status': self.status,
             'override_status': self.override_status,
             'override_speed': self.override_speed,
+            'manual': self.manual,
         }
 
     @classmethod
@@ -216,6 +218,7 @@ class PortLink:
             override_status=data.get('override_status') or None,
             override_speed=(float(data.get('override_speed'))
                             if data.get('override_speed') is not None else None),
+            manual=bool(data.get('manual', False)),
         )
 
 

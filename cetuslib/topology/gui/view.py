@@ -21,7 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
-    QGraphicsView, QLabel, QMenu,
+    QGraphicsView, QLabel, QMenu, QDialog,
 )
 
 from cetuslib.topology.models import (
@@ -335,6 +335,23 @@ def draw_fit_icon(painter: QPainter, rect: QRectF) -> None:
     painter.restore()
 
 
+def draw_link_icon(painter: QPainter, rect: QRectF) -> None:
+    """Draw a two-node link glyph inside ``rect``."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    color = QColor(139, 148, 158)
+    painter.setPen(QPen(color, 1.6))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    y = rect.center().y()
+    x1 = rect.left() + rect.width() * 0.25
+    x2 = rect.left() + rect.width() * 0.75
+    r = min(rect.width(), rect.height()) * 0.18
+    painter.drawLine(QPointF(x1, y), QPointF(x2, y))
+    painter.drawEllipse(QPointF(x1, y), r, r)
+    painter.drawEllipse(QPointF(x2, y), r, r)
+    painter.restore()
+
+
 class NodeItem(QGraphicsObject):
     """A device node. Movable, selectable; emits signals on move / double-click."""
 
@@ -349,6 +366,7 @@ class NodeItem(QGraphicsObject):
         super().__init__()
         self.device = device
         self.edges: list[EdgeItem] = []
+        self._link_highlight = False
         # Level 2+ devices are less relevant: render smaller icons/fonts.
         self.scale = 1.0 if device.layer <= 1 else 0.72
         self.setFlags(
@@ -373,6 +391,18 @@ class NodeItem(QGraphicsObject):
 
     def add_edge(self, edge: EdgeItem) -> None:
         self.edges.append(edge)
+
+    def set_link_highlight(self, on: bool) -> None:
+        self._link_highlight = bool(on)
+        self.update()
+
+    def mousePressEvent(self, event) -> None:
+        scene = self.scene()
+        if scene is not None and getattr(scene, '_link_mode', False):
+            scene.link_hit(self)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def boundingRect(self) -> QRectF:
         s = self.scale
@@ -405,6 +435,12 @@ class NodeItem(QGraphicsObject):
         pen = QPen(ACCENT if self.isSelected() else NODE_BORDER, 2 if self.isSelected() else 1.5)
         painter.setPen(pen)
         painter.drawRoundedRect(rect, 10, 10)
+
+        # strong yellow ring when this node is the pending link source
+        if self._link_highlight:
+            painter.setPen(QPen(QColor(255, 214, 0), 4))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(-5, -5, 5, 5), 14, 14)
 
         # left accent bar coloured by hop level (green = seed, gray = neighbour)
         lvl_color = level_color(self.device.layer)
@@ -496,6 +532,7 @@ class EdgeItem(QGraphicsPathItem):
         self.offset = offset
         self.setZValue(0)
         self.setPen(QPen(EDGE, 2.5))
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.state = 'active'
         self._dash_offset = 0.0
         source.add_edge(self)
@@ -625,6 +662,10 @@ class EdgeItem(QGraphicsPathItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isSelected():
+            painter.setPen(QPen(QColor(255, 255, 255, 150), 6))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.path())
         painter.setPen(self._pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(self.path())
@@ -685,6 +726,7 @@ class GroupNodeItem(QGraphicsObject):
         self.graph = graph
         self.parent_node = parent_node
         self.links: list[GroupLinkItem] = []
+        self._link_highlight = False
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
@@ -725,6 +767,11 @@ class GroupNodeItem(QGraphicsObject):
         painter.setBrush(QColor(22, 27, 34))
         painter.drawEllipse(QPointF(0, 0), self.RADIUS, self.RADIUS)
 
+        if self._link_highlight:
+            painter.setPen(QPen(QColor(255, 214, 0), 4))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(0, 0), self.RADIUS + 5, self.RADIUS + 5)
+
         painter.setPen(color)
         painter.setFont(QFont('Sans', 10, QFont.Weight.Bold))
         painter.drawText(QRectF(-self.RADIUS, -8, self.RADIUS * 2, 18),
@@ -734,7 +781,16 @@ class GroupNodeItem(QGraphicsObject):
         painter.drawText(QRectF(-self.RADIUS, 6, self.RADIUS * 2, 12),
                          Qt.AlignmentFlag.AlignCenter, 'devices')
 
+    def set_link_highlight(self, on: bool) -> None:
+        self._link_highlight = bool(on)
+        self.update()
+
     def mousePressEvent(self, event) -> None:
+        scene = self.scene()
+        if scene is not None and getattr(scene, '_link_mode', False):
+            scene.link_hit(self)
+            event.accept()
+            return
         self.clicked.emit(self)
         super().mousePressEvent(event)
 
@@ -770,6 +826,8 @@ class TopologyScene(QGraphicsScene):
     node_context_menu_requested = pyqtSignal(object, object)
     group_context_menu_requested = pyqtSignal(object, object)
     edge_context_menu_requested = pyqtSignal(object, object)
+    link_requested = pyqtSignal(object, object)   # (source_item, target_item)
+    link_mode_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -781,6 +839,9 @@ class TopologyScene(QGraphicsScene):
         self.clusters: dict[str, list[str]] = {}
         self.visible_levels: Optional[set] = None
         self._manual_counter = 0
+        self._link_mode = False
+        self._link_source: Optional[object] = None
+        self._preview: Optional[QGraphicsPathItem] = None
         self.setBackgroundBrush(BG)
         self.setSceneRect(-20000, -20000, 40000, 40000)
 
@@ -798,6 +859,9 @@ class TopologyScene(QGraphicsScene):
         self.group_items = {}
         self.group_links = []
         self.graph = graph
+        self._link_mode = False
+        self._link_source = None
+        self._preview = None
 
         engine = TopologyEngine()
         self.clusters = engine.group_children(graph)
@@ -826,22 +890,16 @@ class TopologyScene(QGraphicsScene):
             self.group_items[parent_id] = gnode
 
         # edges (skip any link touching a collapsed member)
-        seen: dict[frozenset, int] = {}
         for link in graph.links:
             if link.source_id in grouped or link.target_id in grouped:
                 continue
-            key = frozenset((link.source_id, link.target_id))
-            n = seen.get(key, 0)
-            seen[key] = n + 1
-            # Spread parallel links symmetrically around the straight line:
-            # 0, +1, -1, +2, -2, … so they fan out evenly on both sides.
-            offset = 0 if n == 0 else ((n + 1) // 2) * (1 if n % 2 == 1 else -1)
             src = self.node_items.get(link.source_id)
             dst = self.node_items.get(link.target_id)
             if src and dst:
-                edge = EdgeItem(link, src, dst, offset=offset)
+                edge = EdgeItem(link, src, dst, offset=0)
                 self.edge_items.append(edge)
                 self.addItem(edge)
+        self._assign_pair_offsets()
 
         # dashed line from each level-1 parent to its collapsed group
         for parent_id, gnode in self.group_items.items():
@@ -935,6 +993,112 @@ class TopologyScene(QGraphicsScene):
         self._add_node(device, pos)
         return device
 
+    # ── manual link creation ─────────────────────────────────────────────
+
+    def set_link_mode(self, on: bool) -> None:
+        """Enter/exit manual link-creation mode."""
+        self._link_mode = bool(on)
+        if not on:
+            self._clear_link_source()
+        self.link_mode_changed.emit(self._link_mode)
+
+    def _clear_link_source(self) -> None:
+        if self._link_source is not None:
+            self._link_source.set_link_highlight(False)
+            self._link_source = None
+        self._clear_preview()
+
+    def _clear_preview(self) -> None:
+        if self._preview is not None:
+            self.removeItem(self._preview)
+            self._preview = None
+
+    def _update_preview(self, pos: QPointF) -> None:
+        if self._link_source is None:
+            self._clear_preview()
+            return
+        if self._preview is None:
+            self._preview = QGraphicsPathItem()
+            self._preview.setPen(QPen(QColor(255, 214, 0), 2, Qt.PenStyle.DashLine))
+            self._preview.setZValue(20)
+            self._preview.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self.addItem(self._preview)
+        path = QPainterPath(self._link_source.pos())
+        path.lineTo(pos)
+        self._preview.setPath(path)
+
+    def link_hit(self, item) -> None:
+        """Handle a click on a node/group while in link mode."""
+        if not self._link_mode:
+            return
+        if self._link_source is None:
+            self._link_source = item
+            item.set_link_highlight(True)
+        elif self._link_source is item:
+            self.set_link_mode(False)   # clicking the same object cancels
+        else:
+            source = self._link_source
+            self._link_source = None
+            source.set_link_highlight(False)
+            self._clear_preview()
+            self.link_requested.emit(source, item)
+
+    def mousePressEvent(self, event) -> None:
+        """A click on empty canvas (not a node/group) while in link mode cancels."""
+        if self._link_mode:
+            hit = self.items(event.scenePos())
+            if not any(isinstance(i, (NodeItem, GroupNodeItem)) for i in hit):
+                self.set_link_mode(False)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._link_mode:
+            self._update_preview(event.scenePos())
+        super().mouseMoveEvent(event)
+
+    def add_manual_link(self, source_id: str, source_port: str,
+                        target_id: str, target_port: str,
+                        speed: Optional[float] = None) -> Optional[str]:
+        """Create a manual link between two devices.
+
+        Returns ``None`` on success, or an error message to show the user.
+        """
+        if self.graph is None:
+            self.graph = TopologyGraph()
+        if source_id == target_id:
+            return 'Cannot link a device to itself.'
+        link = PortLink(source_id=source_id, source_port=source_port,
+                        target_id=target_id, target_port=target_port,
+                        source_ifindex=0, manual=True)
+        if speed is not None:
+            link.override_speed = speed
+        for existing in self.graph.links:
+            if existing.key() == link.key():
+                return 'This link already exists.'
+        src = self.node_items.get(source_id)
+        dst = self.node_items.get(target_id)
+        if src is None or dst is None:
+            return 'Endpoint not found on the map.'
+        self.graph.links.append(link)
+        edge = EdgeItem(link, src, dst, offset=0)
+        self.edge_items.append(edge)
+        self.addItem(edge)
+        self._assign_pair_offsets()
+        return None
+
+    def _assign_pair_offsets(self) -> None:
+        """Recompute symmetric offsets for every set of parallel links."""
+        groups: dict[frozenset, list[EdgeItem]] = {}
+        for edge in self.edge_items:
+            key = frozenset((edge.link.source_id, edge.link.target_id))
+            groups.setdefault(key, []).append(edge)
+        for pair in groups.values():
+            for i, edge in enumerate(pair):
+                edge.offset = 0 if i == 0 else ((i + 1) // 2) * (1 if i % 2 == 1 else -1)
+                edge.update_path()
+
     def _on_remove_requested(self, device: Device) -> None:
         if self.remove_node(device.id):
             self.node_removed.emit(device.id)
@@ -946,6 +1110,13 @@ class TopologyScene(QGraphicsScene):
         if edge in self.edge_items:
             self.edge_items.remove(edge)
         self.removeItem(edge)
+
+    def remove_edge(self, edge: EdgeItem) -> None:
+        """Remove an edge item and its PortLink from the graph."""
+        if self.graph is not None:
+            self.graph.links = [l for l in self.graph.links if l is not edge.link]
+        self._remove_edge_item(edge)
+        self._assign_pair_offsets()
 
     def remove_node(self, device_id: str) -> bool:
         """Remove a node item, its device and any touching links from the graph.
@@ -1007,6 +1178,9 @@ class TopologyScene(QGraphicsScene):
         self.group_links = []
         self.graph = graph
         self.clusters = {}
+        self._link_mode = False
+        self._link_source = None
+        self._preview = None
 
         for device_id, device in graph.devices.items():
             node = NodeItem(device)
@@ -1016,17 +1190,14 @@ class TopologyScene(QGraphicsScene):
             self.addItem(node)
             self.node_items[device_id] = node
 
-        seen: dict[frozenset, int] = {}
         for link in graph.links:
-            key = frozenset((link.source_id, link.target_id))
-            offset = seen.get(key, 0)
-            seen[key] = offset + 1 if link.lag else 0
             src = self.node_items.get(link.source_id)
             dst = self.node_items.get(link.target_id)
             if src and dst:
-                edge = EdgeItem(link, src, dst, offset=offset if link.lag else 0)
+                edge = EdgeItem(link, src, dst, offset=0)
                 self.edge_items.append(edge)
                 self.addItem(edge)
+        self._assign_pair_offsets()
 
         for device_id, node in self.node_items.items():
             xy = (positions or {}).get(device_id)
@@ -1085,6 +1256,7 @@ class TopologyView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._zoom = 1.0
         self.minimap = Minimap(self)
         self._legend = QLabel(self)
@@ -1130,7 +1302,7 @@ class TopologyView(QGraphicsView):
             'QMenu::item:selected { background-color:#4169E1; color:#ffffff; }'
             'QMenu::separator { height:1px; background:#30363D; margin:4px 8px; }')
 
-        state_menu = menu.addMenu('Estado')
+        state_menu = menu.addMenu('State')
         s_auto = state_menu.addAction('Auto')
         s_up = state_menu.addAction('Up')
         s_down = state_menu.addAction('Down')
@@ -1138,7 +1310,7 @@ class TopologyView(QGraphicsView):
             act.setCheckable(True)
             act.setChecked(edge.link.override_status == val)
 
-        speed_menu = menu.addMenu('Velocidade')
+        speed_menu = menu.addMenu('Speed')
         v_auto = speed_menu.addAction('Auto')
         v_auto.setCheckable(True)
         v_auto.setChecked(edge.link.override_speed is None)
@@ -1151,8 +1323,19 @@ class TopologyView(QGraphicsView):
             act.setChecked(edge.link.override_speed == mbps)
             v_acts.append((act, mbps))
 
+        menu.addSeparator()
+        edit_act = menu.addAction('Edit') if edge.link.manual else None
+        delete_act = menu.addAction('Delete')
+
         chosen = menu.exec(pos)
         if chosen is None:
+            return
+        if edit_act is not None and chosen is edit_act:
+            self._edit_manual_link(edge)
+            return
+        if chosen is delete_act:
+            self._scene.remove_edge(edge)
+            self._schedule_save()
             return
         if chosen is s_auto:
             edge.link.override_status = None
@@ -1170,6 +1353,18 @@ class TopologyView(QGraphicsView):
         edge.refresh_state()
         edge.update()
         self._schedule_save()
+
+    def _edit_manual_link(self, edge: EdgeItem) -> None:
+        """Edit the port names of a manually-created link."""
+        from cetuslib.topology.gui.detail import LinkEditDialog
+        dialog = LinkEditDialog(
+            edge.source.device.label, edge.link.source_port,
+            edge.target.device.label, edge.link.target_port, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            edge.link.source_port = dialog.source_port()
+            edge.link.target_port = dialog.target_port()
+            edge.update()
+            self._schedule_save()
 
     def set_layout_path(self, path: str) -> None:
         """Enable/change automatic persistence of manual node positions."""
@@ -1299,6 +1494,33 @@ class TopologyView(QGraphicsView):
         self._scene._apply_layout(layout_mode)
         self.fit_in_view()
 
+    def set_link_mode(self, on: bool) -> None:
+        """Toggle manual link-creation mode (cross cursor, no pan-drag)."""
+        self._scene.set_link_mode(on)
+        if on:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._scene._link_mode:
+            self.set_link_mode(False)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def add_manual_link(self, source_id: str, source_port: str,
+                        target_id: str, target_port: str,
+                        speed: Optional[float] = None) -> Optional[str]:
+        """Create a manual link; returns an error message or None on success."""
+        err = self._scene.add_manual_link(source_id, source_port,
+                                          target_id, target_port, speed)
+        if err is None:
+            self._schedule_save()
+        return err
+
     def add_manual_device(self, role: DeviceRole, pos: QPointF) -> Device:
         """Add a manually-placed device (from the palette) and wire its save."""
         device = self._scene.add_manual_device(role, pos)
@@ -1313,6 +1535,7 @@ class TopologyView(QGraphicsView):
 
     def clear_scene(self) -> None:
         """Remove all items and reset the scene (used before a new discovery)."""
+        self.set_link_mode(False)
         self._scene.clear()
         self._scene.node_items = {}
         self._scene.edge_items = []

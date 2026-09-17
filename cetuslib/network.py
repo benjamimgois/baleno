@@ -1761,7 +1761,7 @@ class WifiHeatmapWidget(QWidget):
         self._band_key = '2.4GHz'
         self.setFixedHeight(110)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setToolTip("Waterfall heatmap — frequência (X) × tempo (Y) — cores mais quentes = sinal mais forte")
+        self.setToolTip("Waterfall heatmap — frequency (X) × time (Y) — warmer colors = stronger signal")
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -2174,7 +2174,7 @@ class LatencyGraphWidget(QWidget):
         self._zoom_btn = QPushButton(self)
         self._zoom_btn.setFixedSize(30, 30)
         self._zoom_btn.setCheckable(True)
-        self._zoom_btn.setToolTip("Expandir eixo Y para incluir desvio padrão")
+        self._zoom_btn.setToolTip("Expand Y axis to include standard deviation")
         self._zoom_btn.setStyleSheet(
             "QPushButton{background:rgba(26,31,46,180);border:1px solid #2A3A50;"
             "border-radius:6px;}"

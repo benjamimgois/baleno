@@ -112,7 +112,7 @@ VENDORS = {
         'telnet_login': (re.compile(r'(?i)(login|username)\s*:'), re.compile(r'(?i)password\s*:')),
     },
     'generic': {
-        'label': 'Genérico',
+        'label': 'Generic',
         'prompt': [
             re.compile(r'[^\s\r\n]*[#>$]\s*$'),
         ],

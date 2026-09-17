@@ -6114,7 +6114,7 @@ class TerminalDialog(QWidget):
 
         self._conn_dot = QLabel("●")
         self._conn_dot.setStyleSheet("color: #3a3a3a; font-size: 9pt; background: transparent;")
-        self._conn_label = QLabel("Não conectado")
+        self._conn_label = QLabel("Not connected")
         self._conn_label.setStyleSheet("color: #606060; font-size: 8pt; background: transparent;")
         self._session_timer_label = QLabel("")
         self._session_timer_label.setStyleSheet("color: #505050; font-size: 8pt; background: transparent;")

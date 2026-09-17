@@ -5,13 +5,13 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHeaderView,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
-    QTabWidget, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
+    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from cetuslib.topology.models import Device, DeviceRole
 
-__all__ = ['DeviceDetailDialog', 'GroupDevicesDialog']
+__all__ = ['DeviceDetailDialog', 'GroupDevicesDialog', 'LinkCreationDialog']
 
 
 class DeviceDetailDialog(QDialog):
@@ -151,6 +151,84 @@ class DeviceDetailDialog(QDialog):
         return page
 
 
+class LinkCreationDialog(QDialog):
+    """Configure a manual link: choose/type each endpoint's port and speed."""
+
+    SPEED_OPTIONS = [('Auto', None), ('10 Mbps', 10.0), ('100 Mbps', 100.0),
+                     ('1 Gbps', 1000.0), ('10 Gbps', 10000.0)]
+
+    def __init__(self, source_label: str, source_ifaces, target_label: str,
+                 target_ifaces, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Create Link')
+        self.resize(520, 340)
+
+        layout = QVBoxLayout(self)
+        header = QLabel('<h3>Connect two devices</h3>')
+        header.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(header)
+
+        cols = QHBoxLayout()
+        self._src_group, self._src_list, self._src_edit = self._side(source_label, source_ifaces)
+        self._dst_group, self._dst_list, self._dst_edit = self._side(target_label, target_ifaces)
+        cols.addWidget(self._src_group)
+        cols.addWidget(self._dst_group)
+        layout.addLayout(cols)
+
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel('Speed:'))
+        self.speed_combo = QComboBox()
+        for label, mbps in self.SPEED_OPTIONS:
+            self.speed_combo.addItem(label, mbps)
+        speed_row.addWidget(self.speed_combo)
+        speed_row.addStretch(1)
+        layout.addLayout(speed_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _side(self, label: str, ifaces):
+        """Build one endpoint column. Returns (container, list_or_None, edit_or_None)."""
+        group = QGroupBox(label)
+        v = QVBoxLayout(group)
+        lst = None
+        edit = None
+        if ifaces:
+            lst = QListWidget()
+            for iface in ifaces:
+                it = QListWidgetItem(iface.name)
+                it.setData(Qt.ItemDataRole.UserRole, iface.name)
+                if iface.descr:
+                    it.setToolTip(iface.descr)
+                lst.addItem(it)
+            lst.setCurrentRow(0)
+            v.addWidget(lst)
+        else:
+            edit = QLineEdit()
+            edit.setPlaceholderText('port name (e.g. Gi0/1)')
+            v.addWidget(edit)
+        return group, lst, edit
+
+    @staticmethod
+    def _port(lst, edit) -> str:
+        if lst is not None:
+            it = lst.currentItem()
+            return it.data(Qt.ItemDataRole.UserRole) if it else ''
+        return edit.text().strip() if edit is not None else ''
+
+    def source_port(self) -> str:
+        return self._port(self._src_list, self._src_edit)
+
+    def target_port(self) -> str:
+        return self._port(self._dst_list, self._dst_edit)
+
+    def speed(self):
+        return self.speed_combo.currentData()
+
+
 class GroupDevicesDialog(QDialog):
     """Read-only table listing the devices collapsed into a group node."""
 
@@ -182,3 +260,34 @@ class GroupDevicesDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+
+class LinkEditDialog(QDialog):
+    """Edit the port names of a manually-created link."""
+
+    def __init__(self, source_label: str, source_port: str,
+                 target_label: str, target_port: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Edit Link')
+        self.resize(380, 150)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.source_edit = QLineEdit(source_port)
+        self.target_edit = QLineEdit(target_port)
+        form.addRow(f'Port ({source_label})', self.source_edit)
+        form.addRow(f'Port ({target_label})', self.target_edit)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def source_port(self) -> str:
+        return self.source_edit.text().strip()
+
+    def target_port(self) -> str:
+        return self.target_edit.text().strip()
+

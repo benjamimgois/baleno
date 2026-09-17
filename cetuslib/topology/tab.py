@@ -14,12 +14,12 @@ import json
 import os
 
 from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt, QTimer
-from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QComboBox, QProgressBar, QMessageBox,
     QApplication, QMenu, QToolButton, QCheckBox, QButtonGroup,
-    QStackedWidget, QFileDialog, QScrollArea,
+    QStackedWidget, QFileDialog, QScrollArea, QDialog,
 )
 
 from cetuslib.topology.collector import SnmpCredentials
@@ -28,8 +28,11 @@ from cetuslib.topology.monitor import TrafficMonitor
 from cetuslib.topology.models import Device, DeviceRole
 from cetuslib.topology.gui.view import (
     TopologyView, DEVICE_MIME, role_renderer, draw_layout_icon, draw_fit_icon,
+    draw_link_icon, GroupNodeItem,
 )
-from cetuslib.topology.gui.detail import DeviceDetailDialog, GroupDevicesDialog
+from cetuslib.topology.gui.detail import (
+    DeviceDetailDialog, GroupDevicesDialog, LinkCreationDialog,
+)
 from cetuslib.topology.persistence import default_map_path
 from cetuslib.topology.actions import TopologyActions
 
@@ -172,6 +175,34 @@ class FitButton(QToolButton):
         painter.end()
 
 
+class LinkButton(QToolButton):
+    """Toggle button that enters/exits manual link-creation mode."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setFixedSize(72, 70)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip('Create link — click two devices')
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isChecked():
+            bg = QColor(40, 60, 120)
+        elif self.underMouse():
+            bg = QColor(28, 33, 40)
+        else:
+            bg = QColor(22, 27, 34)
+        painter.fillRect(self.rect(), bg)
+        draw_link_icon(painter, QRectF(10, 8, self.width() - 20, self.height() - 22))
+        painter.setPen(QColor(88, 166, 255) if self.isChecked() else QColor(201, 209, 217))
+        painter.setFont(QFont('Sans', 7))
+        painter.drawText(QRectF(0, self.height() - 17, self.width(), 14),
+                         Qt.AlignmentFlag.AlignCenter, 'Link')
+        painter.end()
+
+
 class DevicePaletteButton(QToolButton):
     """A device-type button in the palette; draggable onto the map."""
 
@@ -257,6 +288,11 @@ class TopologyTab(QWidget):
         self.view._scene.group_clicked.connect(self._on_group_clicked)
         self.view._scene.node_context_menu_requested.connect(self._on_node_context_menu)
         self.view._scene.group_context_menu_requested.connect(self._on_group_context_menu)
+        self.view._scene.link_requested.connect(self._on_link_requested)
+        self.view._scene.link_mode_changed.connect(self._on_link_mode_changed)
+        self._link_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._link_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._link_shortcut.activated.connect(self._cancel_link_mode)
 
         root.addWidget(self._build_ribbon_tabs())
         self.ribbon_stack = QStackedWidget()
@@ -416,6 +452,9 @@ class TopologyTab(QWidget):
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(8)
+        self.link_btn = LinkButton()
+        self.link_btn.toggled.connect(self._on_link_toggled)
+        row_layout.addWidget(self.link_btn)
         for role, label in _PALETTE:
             row_layout.addWidget(DevicePaletteButton(role, label))
         row_layout.addStretch(1)
@@ -625,6 +664,41 @@ class TopologyTab(QWidget):
         if self._main is None:
             return
         TopologyActions.show_group_menu(self._main, group, pos)
+
+    # ── manual link creation ─────────────────────────────────────────────
+
+    def _on_link_toggled(self, checked: bool) -> None:
+        self.view.set_link_mode(checked)
+
+    def _on_link_mode_changed(self, on: bool) -> None:
+        self.link_btn.blockSignals(True)
+        self.link_btn.setChecked(on)
+        self.link_btn.blockSignals(False)
+
+    def _cancel_link_mode(self) -> None:
+        if self.view._scene._link_mode:
+            self.view.set_link_mode(False)
+
+    @staticmethod
+    def _endpoint_info(item):
+        if isinstance(item, GroupNodeItem):
+            dev = item.graph.devices.get(item.parent_id)
+            label = dev.label if dev is not None else item.parent_id
+            return item.parent_id, label, []
+        ifaces = sorted(item.device.interfaces.values(), key=lambda i: i.index)
+        return item.device.id, item.device.label, ifaces
+
+    def _on_link_requested(self, source, target) -> None:
+        src_id, src_label, src_ifaces = self._endpoint_info(source)
+        dst_id, dst_label, dst_ifaces = self._endpoint_info(target)
+        dialog = LinkCreationDialog(src_label, src_ifaces, dst_label, dst_ifaces, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            err = self.view.add_manual_link(
+                src_id, dialog.source_port(), dst_id, dialog.target_port(),
+                dialog.speed())
+            if err:
+                QMessageBox.warning(self, 'Link', err)
+        self.view.set_link_mode(False)
 
     def _show_community_menu(self) -> None:
         history = self._config.get_vuln_community_history()

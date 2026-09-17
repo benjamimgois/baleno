@@ -96,19 +96,19 @@ def parse_targets(text):
             if _is_valid_ipv4(line):
                 _push(line)
             else:
-                invalid.append((line, 'endereço IPv4 inválido'))
+                invalid.append((line, 'invalid IPv4 address'))
             continue
         parts = line.split('-', 1)
         left, right = parts[0].strip(), parts[1].strip()
         if not _is_valid_ipv4(left):
-            invalid.append((line, 'endereço IPv4 inválido'))
+            invalid.append((line, 'invalid IPv4 address'))
             continue
         l_prefix, l_last = left.rsplit('.', 1)
         if right.isdigit():
             r_last = int(right)
         else:
             if not _is_valid_ipv4(right):
-                invalid.append((line, 'endereço IPv4 inválido'))
+                invalid.append((line, 'invalid IPv4 address'))
                 continue
             r_prefix, r_last_text = right.rsplit('.', 1)
             if r_prefix != l_prefix:

@@ -1513,11 +1513,11 @@ class SerialTerminalGUI(QMainWindow):
         _iface_row.addWidget(self._traffic_iface_combo)
 
         _snap_tip = (
-            "<b>Snap Length</b> — número máximo de bytes capturados por pacote.<br><br>"
-            "<b>96–256</b> &nbsp;→ cabeçalhos apenas (Ethernet + IP + TCP/UDP + início do payload).<br>"
-            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Menor uso de CPU/memória; ideal para identificar protocolo e IPs.<br>"
-            "<b>512–1500</b> → inclui boa parte do payload; útil para inspecionar HTTP, DNS, etc.<br>"
-            "<b>65535</b> &nbsp;&nbsp;&nbsp;→ captura o pacote inteiro (sem limite)."
+            "<b>Snap Length</b> — maximum number of bytes captured per packet.<br><br>"
+            "<b>96–256</b> &nbsp;→ headers only (Ethernet + IP + TCP/UDP + start of payload).<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lower CPU/memory usage; ideal for identifying protocol and IPs.<br>"
+            "<b>512–1500</b> → includes most of the payload; useful for inspecting HTTP, DNS, etc.<br>"
+            "<b>65535</b> &nbsp;&nbsp;&nbsp;→ captures the entire packet (no limit)."
         )
         _snap_label = QLabel("Snap len:")
         _snap_label.setStyleSheet("color: #555; font-size: 9pt;")
@@ -1623,11 +1623,11 @@ class SerialTerminalGUI(QMainWindow):
             'L7':  'Layer 7',
         }
         _layer_tooltip = {
-            'All': '<b>All</b> — captura todos os pacotes sem filtro por camada.',
-            'L2':  '<b>Layer 2 — Data Link</b><br>Frames Ethernet: ARP, Broadcast, Multicast, VLAN (802.1Q), STP.',
-            'L3':  '<b>Layer 3 — Network</b><br>Pacotes IP: ICMP, ICMPv6, IPv4, IPv6, OSPF, fragmentação.',
-            'L4':  '<b>Layer 4 — Transport</b><br>Segmentos TCP e UDP, incluindo flags SYN, RST e FIN.',
-            'L7':  '<b>Layer 7 — Application</b><br>Protocolos de aplicação: HTTP, HTTPS, DNS, SSH, Telnet, FTP, DHCP, SNMP, RDP, BGP, SIP, SMB.',
+            'All': '<b>All</b> — capture all packets without layer filtering.',
+            'L2':  '<b>Layer 2 — Data Link</b><br>Ethernet frames: ARP, Broadcast, Multicast, VLAN (802.1Q), STP.',
+            'L3':  '<b>Layer 3 — Network</b><br>IP packets: ICMP, ICMPv6, IPv4, IPv6, OSPF, fragmentation.',
+            'L4':  '<b>Layer 4 — Transport</b><br>TCP and UDP segments, including SYN, RST and FIN flags.',
+            'L7':  '<b>Layer 7 — Application</b><br>Application protocols: HTTP, HTTPS, DNS, SSH, Telnet, FTP, DHCP, SNMP, RDP, BGP, SIP, SMB.',
         }
         self._traffic_layer_btns = {}
         for _ln in self._LAYER_FILTERS:
@@ -13764,20 +13764,20 @@ class SerialTerminalGUI(QMainWindow):
         self.iperf_duration_combo.setFixedHeight(26)
         # Arrow button — public iPerf3 server presets
         _iperf_servers = [
-            ("🇧🇷 Brasil — São Paulo",      "speedtest.claro.net.br"),
-            ("🇧🇷 Brasil — Rio de Janeiro", "200.160.7.186"),
+            ("🇧🇷 Brazil — São Paulo",      "speedtest.claro.net.br"),
+            ("🇧🇷 Brazil — Rio de Janeiro", "200.160.7.186"),
             (None, None),
             ("🇺🇸 USA — Fremont, CA",       "iperf.he.net"),
             ("🇺🇸 USA — New York",          "nyc.speedtest.clouvider.net"),
-            ("🇨🇦 Canadá — Toronto",        "speedtest.eastlink.ca"),
+            ("🇨🇦 Canada — Toronto",        "speedtest.eastlink.ca"),
             (None, None),
             ("🇬🇧 UK — London",             "lon.speedtest.clouvider.net"),
-            ("🇫🇷 França — Paris",          "bouygues.iperf.fr"),
-            ("🇩🇪 Alemanha — Frankfurt",    "fra.speedtest.clouvider.net"),
-            ("🇳🇱 Holanda",                 "speedtest.serverius.net"),
+            ("🇫🇷 France — Paris",          "bouygues.iperf.fr"),
+            ("🇩🇪 Germany — Frankfurt",     "fra.speedtest.clouvider.net"),
+            ("🇳🇱 Netherlands",             "speedtest.serverius.net"),
             (None, None),
-            ("🇸🇬 Singapura",               "sgp.speedtest.clouvider.net"),
-            ("🇦🇺 Austrália — Sydney",      "syd.speedtest.clouvider.net"),
+            ("🇸🇬 Singapore",               "sgp.speedtest.clouvider.net"),
+            ("🇦🇺 Australia — Sydney",      "syd.speedtest.clouvider.net"),
         ]
         _srv_btn = QPushButton()
         _srv_btn.setIcon(QIcon(self.get_arrow_icon_path()))
