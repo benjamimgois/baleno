@@ -14389,6 +14389,13 @@ class SerialTerminalGUI(QMainWindow):
         self._st_ping_worker.error.connect(lambda _: self.stat_ping.setText("—"))
         self._st_ping_worker.start()
 
+    def closeEvent(self, event):
+        topo_page = getattr(self, 'topology_page', None)
+        if topo_page is not None and getattr(topo_page, '_detached_window', None) is not None:
+            topo_page._detached_window._reattaching = True
+            topo_page._detached_window.close()
+        super().closeEvent(event)
+
 
 def main():
     app = QApplication(sys.argv)

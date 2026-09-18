@@ -470,7 +470,105 @@ class TestDiscoveryModesAndLayers(unittest.TestCase):
         is_nbr_lldp = getattr(node_lldp.device, 'layer', 1) > 1
         self.assertTrue(is_nbr_lldp)
 
+    def test_context_menu_icons_and_ping_suboptions(self):
+        """Verify device context menu has icons for Device Type, Layer, Ping and 3 ping sub-options."""
+        from PyQt6.QtWidgets import QApplication, QMenu
+        from balenolib.topology.actions import TopologyActions, _ICONS
+
+        app = QApplication.instance() or QApplication([])
+
+        class MockMainWindow:
+            def __init__(self):
+                self.config = MagicMock()
+                self.switch_tab = MagicMock()
+                self.traceroute_target_input = MagicMock()
+                self.traceroute_port_input = MagicMock()
+                self._traceroute_method_btns = {}
+                self._traceroute_method_changed = MagicMock()
+                self._start_ping = MagicMock()
+
+            def get_icon_path(self, name):
+                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                p = os.path.join(base, 'assets', 'icons', name)
+                return p if os.path.exists(p) else None
+
+        main_win = MockMainWindow()
+
+        # 1. Verify icons exist and load as valid QIcons
+        for icon_key in ('ping', 'ping_icmp', 'ping_tcp80', 'ping_tcp22', 'device_type', 'layer'):
+            self.assertIn(icon_key, _ICONS)
+            ico = TopologyActions._icon(main_win, icon_key)
+            self.assertIsNotNone(ico)
+            self.assertFalse(ico.isNull(), f'Icon for {icon_key} must not be null')
+
+        # 2. Inspect menu structure
+        dev = Device(id='test_dev', ip='192.168.10.1', hostname='TestHost')
+        captured_menus = []
+
+        def mock_exec_capture(menu_obj, pos=None):
+            captured_menus.append(menu_obj)
+            return None
+
+        with patch.object(QMenu, 'exec', mock_exec_capture):
+            TopologyActions.show_node_menu(main_win, dev, None)
+
+        self.assertEqual(len(captured_menus), 1)
+        menu = captured_menus[0]
+
+        # Device Type submenu has icon
+        dev_type_act = next(a for a in menu.actions() if 'Device Type' in a.text())
+        self.assertIsNotNone(dev_type_act.menu())
+        self.assertFalse(dev_type_act.icon().isNull())
+
+        # Layer submenu has icon
+        layer_act = next(a for a in menu.actions() if 'Layer' in a.text())
+        self.assertIsNotNone(layer_act.menu())
+        self.assertFalse(layer_act.icon().isNull())
+
+        # Ping submenu has icon and 3 sub-actions with icons
+        ping_act = next(a for a in menu.actions() if a.text() == 'Ping')
+        ping_menu = ping_act.menu()
+        self.assertIsNotNone(ping_menu)
+        self.assertFalse(ping_act.icon().isNull())
+
+        ping_sub_actions = ping_menu.actions()
+        ping_sub_labels = [a.text() for a in ping_sub_actions]
+        self.assertEqual(ping_sub_labels, ['Ping (ICMP)', 'Ping (TCP 80)', 'Ping (TCP 22)'])
+        for sub_act in ping_sub_actions:
+            self.assertFalse(sub_act.icon().isNull(), f'Sub-action {sub_act.text()} must have an icon')
+
+        # 3. Test selection dispatch
+        from PyQt6.QtGui import QAction
+
+        # ICMP dispatch
+        def exec_icmp(menu_self, pos=None):
+            return next(a for a in menu_self.findChildren(QAction) if 'ICMP' in a.text())
+
+        with patch.object(QMenu, 'exec', exec_icmp):
+            with patch.object(TopologyActions, '_invoke_ping') as mock_invoke:
+                TopologyActions.show_node_menu(main_win, dev, None)
+                mock_invoke.assert_called_once_with(main_win, dev, method='icmp')
+
+        # TCP 80 dispatch
+        def exec_tcp80(menu_self, pos=None):
+            return next(a for a in menu_self.findChildren(QAction) if 'TCP 80' in a.text())
+
+        with patch.object(QMenu, 'exec', exec_tcp80):
+            with patch.object(TopologyActions, '_invoke_ping') as mock_invoke:
+                TopologyActions.show_node_menu(main_win, dev, None)
+                mock_invoke.assert_called_once_with(main_win, dev, method='tcp', port=80)
+
+        # TCP 22 dispatch
+        def exec_tcp22(menu_self, pos=None):
+            return next(a for a in menu_self.findChildren(QAction) if 'TCP 22' in a.text())
+
+        with patch.object(QMenu, 'exec', exec_tcp22):
+            with patch.object(TopologyActions, '_invoke_ping') as mock_invoke:
+                TopologyActions.show_node_menu(main_win, dev, None)
+                mock_invoke.assert_called_once_with(main_win, dev, method='tcp', port=22)
+
 
 if __name__ == '__main__':
     unittest.main()
+
 

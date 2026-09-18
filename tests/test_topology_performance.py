@@ -229,7 +229,9 @@ class TestTopologyPerformance(unittest.TestCase):
 
         tab = TopologyTab(config_manager=mock_config)
         self.assertTrue(tab.anim_toggle_btn.isChecked())
-        self.assertIn('Animate', tab.anim_toggle_btn.text())
+        self.assertEqual(tab.anim_toggle_btn.text(), '')
+        self.assertFalse(tab.anim_toggle_btn.icon().isNull())
+        self.assertIn('Pause', tab.anim_toggle_btn.toolTip())
         self.assertTrue(tab.view._animation_enabled)
 
         # Toggle button to OFF
@@ -237,13 +239,68 @@ class TestTopologyPerformance(unittest.TestCase):
         self.assertFalse(tab.view._animation_enabled)
         self.assertFalse(mock_config.set.call_args[0][1] if mock_config.set.called else True)
         self.assertFalse(config_store['topology_animate_links'])
-        self.assertEqual(tab.anim_toggle_btn.text(), '▶ Animate')
+        self.assertEqual(tab.anim_toggle_btn.text(), '')
+        self.assertFalse(tab.anim_toggle_btn.icon().isNull())
+        self.assertIn('Resume', tab.anim_toggle_btn.toolTip())
 
         # Toggle button to ON
         tab.anim_toggle_btn.setChecked(True)
         self.assertTrue(tab.view._animation_enabled)
         self.assertTrue(config_store['topology_animate_links'])
-        self.assertEqual(tab.anim_toggle_btn.text(), '⏸ Animate')
+        self.assertEqual(tab.anim_toggle_btn.text(), '')
+        self.assertFalse(tab.anim_toggle_btn.icon().isNull())
+        self.assertIn('Pause', tab.anim_toggle_btn.toolTip())
+
+    def test_toolbar_icon_only_buttons_and_detach_flow(self):
+        """Verify Undo, Redo, Animate and Detach buttons have no text, valid icons, and detach/reattach works."""
+        from PyQt6.QtWidgets import QStackedWidget
+        from balenolib.topology.tab import DetachedTopologyWindow
+
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda k, d='': True if k == 'topology_animate_links' else ('["public"]' if k == 'vuln_community_history' else d)
+        mock_config.get_vuln_community_history.return_value = ['public']
+
+        class MockMainWindow:
+            def __init__(self):
+                self.content_stack = QStackedWidget()
+                self.config = mock_config
+                self.switch_tab = MagicMock()
+
+        main_win = MockMainWindow()
+        tab = TopologyTab(config_manager=mock_config, main_window=main_win)
+        main_win.content_stack.addWidget(tab)
+
+        # 1. Undo / Redo are icon-only
+        self.assertEqual(tab.undo_btn.text(), '')
+        self.assertFalse(tab.undo_btn.icon().isNull())
+        self.assertEqual(tab.redo_btn.text(), '')
+        self.assertFalse(tab.redo_btn.icon().isNull())
+
+        # 2. Detach button exists and is icon-only
+        self.assertTrue(hasattr(tab, 'detach_btn'))
+        self.assertEqual(tab.detach_btn.text(), '')
+        self.assertFalse(tab.detach_btn.icon().isNull())
+
+        # 3. Test detaching into DetachedTopologyWindow
+        tab.detach_btn.click()
+        self.assertIsNotNone(tab._detached_window)
+        self.assertIsInstance(tab._detached_window, DetachedTopologyWindow)
+        self.assertEqual(tab.window(), tab._detached_window)
+        self.assertIsNotNone(tab._placeholder_widget)
+        self.assertEqual(main_win.content_stack.currentWidget(), tab._placeholder_widget)
+
+        # 4. Test reattaching via detach_btn
+        tab.detach_btn.click()
+        self.assertIsNone(tab._detached_window)
+        self.assertIsNone(tab._placeholder_widget)
+        self.assertGreaterEqual(main_win.content_stack.indexOf(tab), 0)
+
+        # 5. Test detaching and reattaching via window closeEvent
+        tab._detach_to_window()
+        self.assertIsNotNone(tab._detached_window)
+        tab._detached_window.close()
+        self.assertIsNone(tab._detached_window)
+        self.assertGreaterEqual(main_win.content_stack.indexOf(tab), 0)
 
     def test_opengl_viewport_fallback_safety(self):
         """TopologyView must gracefully handle offscreen/fallback raster mode without crashing."""

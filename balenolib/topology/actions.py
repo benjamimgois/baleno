@@ -26,6 +26,11 @@ DEFAULT_SCAN_PORTS = '22,23,80,443,3389,8080,8443,161'
 # stay visible on the dark context-menu background.
 _ICONS = {
     'ping': 'proto_icmp.svg',
+    'ping_icmp': 'ping_icmp.svg',
+    'ping_tcp80': 'ping_tcp80.svg',
+    'ping_tcp22': 'ping_tcp22.svg',
+    'device_type': 'device_type.svg',
+    'layer': 'layer_stack.svg',
     'access': 'remote.svg',
     'ssh': 'ssh2.svg',
     'telnet': 'telnet.svg',
@@ -147,8 +152,14 @@ class TopologyActions:
         has_ip = bool(device.ip)
         menu = TopologyActions._dark_menu()
 
-        ping_act = menu.addAction('Ping')
-        ping_act.setIcon(TopologyActions._icon(main_window, 'ping'))
+        ping_menu = menu.addMenu('Ping')
+        ping_menu.setIcon(TopologyActions._icon(main_window, 'ping'))
+        p_icmp = ping_menu.addAction('Ping (ICMP)')
+        p_icmp.setIcon(TopologyActions._icon(main_window, 'ping_icmp'))
+        p_tcp80 = ping_menu.addAction('Ping (TCP 80)')
+        p_tcp80.setIcon(TopologyActions._icon(main_window, 'ping_tcp80'))
+        p_tcp22 = ping_menu.addAction('Ping (TCP 22)')
+        p_tcp22.setIcon(TopologyActions._icon(main_window, 'ping_tcp22'))
         menu.addSeparator()
 
         access = menu.addMenu('Access')
@@ -195,8 +206,7 @@ class TopologyActions:
         t_tftp.setIcon(TopologyActions._icon(main_window, 'tftp'))
 
         if not has_ip:
-            ping_act.setEnabled(False)
-            for sub in (access, scan, traceroute, snmp, transfer):
+            for sub in (ping_menu, access, scan, traceroute, snmp, transfer):
                 sub.setEnabled(False)
 
         menu.addSeparator()
@@ -204,6 +214,7 @@ class TopologyActions:
         # Device Type submenu
         type_title = 'Device Type' if count <= 1 else f'Device Type ({count} devices)'
         type_menu = menu.addMenu(type_title)
+        type_menu.setIcon(TopologyActions._icon(main_window, 'device_type'))
         from balenolib.topology.models import DeviceRole
         from balenolib.topology.gui.view import make_role_icon
         from balenolib.topology.gui.layers import make_color_icon
@@ -237,6 +248,7 @@ class TopologyActions:
         # Layer submenu
         layer_title = 'Layer' if count <= 1 else f'Layer ({count} devices)'
         layer_menu = menu.addMenu(layer_title)
+        layer_menu.setIcon(TopologyActions._icon(main_window, 'layer'))
         topo_page = getattr(main_window, 'topology_page', None)
         graph = getattr(topo_page, '_graph', None) if topo_page else None
         known_layers: set[str] = set()
@@ -277,8 +289,12 @@ class TopologyActions:
         chosen = menu.exec(pos)
         if chosen is None:
             return
-        if chosen is ping_act:
-            TopologyActions._invoke_ping(main_window, device)
+        if chosen is p_icmp:
+            TopologyActions._invoke_ping(main_window, device, method='icmp')
+        elif chosen is p_tcp80:
+            TopologyActions._invoke_ping(main_window, device, method='tcp', port=80)
+        elif chosen is p_tcp22:
+            TopologyActions._invoke_ping(main_window, device, method='tcp', port=22)
         elif include_remove and chosen is remove_act:
             TopologyActions._remove_nodes(main_window, target_devices)
         elif chosen is a_ssh:
@@ -436,11 +452,29 @@ class TopologyActions:
         TopologyActions._remove_nodes(main_window, [device])
 
     @staticmethod
-    def _invoke_ping(main_window, device) -> None:
-        """Open a ping to the device IP in the system's native terminal."""
-        if not device.ip:
+    def _invoke_ping(main_window, device, method: str = 'icmp', port: int = 80) -> None:
+        """Open a ping to the device IP in Tab 3 or native terminal."""
+        if not device or not device.ip:
             return
-        main_window._launch_native_terminal(['ping', device.ip])
+        if hasattr(main_window, 'switch_tab') and hasattr(main_window, '_start_ping'):
+            main_window.switch_tab(3)
+            if hasattr(main_window, 'traceroute_target_input'):
+                main_window.traceroute_target_input.setText(device.ip)
+            tr_method = 'Ping ICMP' if method.lower() == 'icmp' else 'Ping TCP'
+            if tr_method == 'Ping TCP' and hasattr(main_window, 'traceroute_port_input'):
+                main_window.traceroute_port_input.setText(str(port))
+            main_window.traceroute_current_method = tr_method
+            if hasattr(main_window, '_traceroute_method_btns'):
+                for _k, _b in main_window._traceroute_method_btns.items():
+                    _b.setChecked(_k == tr_method)
+            if hasattr(main_window, '_traceroute_method_changed'):
+                main_window._traceroute_method_changed(tr_method)
+            main_window._start_ping()
+        elif hasattr(main_window, '_launch_native_terminal'):
+            if method.lower() == 'icmp':
+                main_window._launch_native_terminal(['ping', device.ip])
+            else:
+                main_window._launch_native_terminal(['nc', '-zv', device.ip, str(port)])
 
     @staticmethod
     def _invoke_ssh(main_window, device, protocol: str) -> None:

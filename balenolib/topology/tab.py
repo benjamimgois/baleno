@@ -13,17 +13,18 @@ import json
 import os
 
 from PyQt6.QtCore import (
-    QMimeData, QPoint, QPointF, QRectF, Qt, QTimer,
+    QMimeData, QPoint, QPointF, QRectF, Qt, QTimer, QSize,
     QPropertyAnimation, QEasingCurve,
 )
-from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QShortcut, QKeySequence
+from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QShortcut, QKeySequence, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QComboBox, QProgressBar, QMessageBox,
     QApplication, QMenu, QToolButton, QFileDialog, QScrollArea, QDialog,
-    QColorDialog,
+    QColorDialog, QMainWindow,
 )
 
+from balenolib.utils import load_svg_icon_dual
 from balenolib.topology.collector import SnmpCredentials
 from balenolib.topology.worker import TopologyDiscoveryWorker
 from balenolib.topology.monitor import TrafficMonitor
@@ -39,7 +40,7 @@ from balenolib.topology.gui.detail import (
 from balenolib.topology.persistence import default_map_path
 from balenolib.topology.actions import TopologyActions
 
-__all__ = ['TopologyTab']
+__all__ = ['TopologyTab', 'DetachedTopologyWindow']
 
 _ROYAL = '#4169E1'
 _ROYAL_HOVER = '#3156C8'
@@ -288,6 +289,43 @@ class SnmpDialog(QDialog):
             self.community_edit.setText(chosen.text())
 
 
+class DetachedTopologyWindow(QMainWindow):
+    """Standalone window hosting the TopologyTab when detached from the main window."""
+
+    def __init__(self, tab_widget: TopologyTab, title: str = 'Baleno — Topology', parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(1280, 800)
+        self.setObjectName('detachedTopologyWindow')
+        self._tab = tab_widget
+        self._reattaching = False
+
+        self.setStyleSheet(f"""
+            QMainWindow#detachedTopologyWindow {{
+                background-color: {_BG_INPUT};
+            }}
+        """)
+
+        # Set window icon if available
+        if tab_widget._main and hasattr(tab_widget._main, 'windowIcon'):
+            self.setWindowIcon(tab_widget._main.windowIcon())
+
+        tab_widget.setParent(self)
+        self.setCentralWidget(tab_widget)
+        tab_widget.show()
+
+    def closeEvent(self, event):
+        if self._reattaching:
+            event.accept()
+            return
+        if self._tab and hasattr(self._tab, '_reattach_to_main'):
+            self._reattaching = True
+            self._tab._reattach_to_main()
+            event.accept()
+        else:
+            super().closeEvent(event)
+
+
 class TopologyTab(QWidget):
     """Studio / CAD layout: unified topbar + canvas + collapsible sidebar."""
 
@@ -299,6 +337,8 @@ class TopologyTab(QWidget):
         self._monitor = None
         self._graph = None
         self._live_devices: dict[str, Device] = {}
+        self._detached_window: Optional[DetachedTopologyWindow] = None
+        self._placeholder_widget: Optional[QWidget] = None
         self.setObjectName('topologyRoot')
         self.setStyleSheet(_TAB_STYLE)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -427,7 +467,11 @@ class TopologyTab(QWidget):
 
         # 3. Undo / Redo
         self.undo_btn = QToolButton()
-        self.undo_btn.setText('↶ Undo')
+        self.undo_btn.setText('')
+        ico_undo = self._get_icon('undo', 16)
+        if ico_undo:
+            self.undo_btn.setIcon(ico_undo)
+            self.undo_btn.setIconSize(QSize(16, 16))
         self.undo_btn.setToolTip('Undo last change (Ctrl+Z)')
         self.undo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.undo_btn.setEnabled(False)
@@ -435,7 +479,11 @@ class TopologyTab(QWidget):
         layout.addWidget(self.undo_btn)
 
         self.redo_btn = QToolButton()
-        self.redo_btn.setText('↷ Redo')
+        self.redo_btn.setText('')
+        ico_redo = self._get_icon('redo', 16)
+        if ico_redo:
+            self.redo_btn.setIcon(ico_redo)
+            self.redo_btn.setIconSize(QSize(16, 16))
         self.redo_btn.setToolTip('Redo change (Ctrl+Y / Ctrl+Shift+Z)')
         self.redo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.redo_btn.setEnabled(False)
@@ -507,7 +555,7 @@ class TopologyTab(QWidget):
 
         layout.addWidget(self._vsep())
 
-        # 7. Animation toggle (marching-ants)
+        # 7. Animation toggle (marching-ants Play/Pause)
         self.anim_toggle_btn = QToolButton()
         self.anim_toggle_btn.setCheckable(True)
         anim_enabled = True
@@ -519,9 +567,18 @@ class TopologyTab(QWidget):
         self.anim_toggle_btn.toggled.connect(self._on_anim_toggled)
         layout.addWidget(self.anim_toggle_btn)
 
+        layout.addWidget(self._vsep())
+
+        # 8. Detach / Reattach window
+        self.detach_btn = QToolButton()
+        self.detach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.detach_btn.clicked.connect(self._toggle_detached)
+        self._update_detach_btn_ui(is_detached=False)
+        layout.addWidget(self.detach_btn)
+
         layout.addStretch(1)
 
-        # 8. Fast search
+        # 9. Fast search
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('🔍 Search IP, host or vendor…')
         self.search_edit.setFixedWidth(220)
@@ -794,12 +851,33 @@ class TopologyTab(QWidget):
             self.pan_mode_btn.blockSignals(False)
         self.view.set_interaction_mode(mode)
 
+    def _get_icon(self, name: str, size: int = 16) -> Optional[QIcon]:
+        filename = f'{name}.svg' if not name.endswith('.svg') else name
+        path = None
+        if self._main and hasattr(self._main, 'get_icon_path'):
+            path = self._main.get_icon_path(filename)
+        if not path or not os.path.exists(path):
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            p = os.path.join(base_dir, 'assets', 'icons', filename)
+            if os.path.exists(p):
+                path = p
+        if not path or not os.path.exists(path):
+            return None
+        return load_svg_icon_dual(path, size, '#c9d1d9', '#ffffff')
+
     def _update_anim_toggle_ui(self, enabled: bool) -> None:
+        self.anim_toggle_btn.setText('')
         if enabled:
-            self.anim_toggle_btn.setText('⏸ Animate')
+            ico = self._get_icon('anim_pause', 16)
+            if ico:
+                self.anim_toggle_btn.setIcon(ico)
+                self.anim_toggle_btn.setIconSize(QSize(16, 16))
             self.anim_toggle_btn.setToolTip('Pause link traffic animation (marching-ants)')
         else:
-            self.anim_toggle_btn.setText('▶ Animate')
+            ico = self._get_icon('anim_play', 16)
+            if ico:
+                self.anim_toggle_btn.setIcon(ico)
+                self.anim_toggle_btn.setIconSize(QSize(16, 16))
             self.anim_toggle_btn.setToolTip('Resume link traffic animation (marching-ants)')
 
     def _on_anim_toggled(self, checked: bool) -> None:
@@ -807,6 +885,129 @@ class TopologyTab(QWidget):
         self.view.set_animation_enabled(checked)
         if self._config:
             self._config.set('topology_animate_links', checked)
+
+    def _update_detach_btn_ui(self, is_detached: bool) -> None:
+        self.detach_btn.setText('')
+        icon_name = 'reattach' if is_detached else 'detach'
+        ico = self._get_icon(icon_name, 16)
+        if ico:
+            self.detach_btn.setIcon(ico)
+            self.detach_btn.setIconSize(QSize(16, 16))
+        if is_detached:
+            self.detach_btn.setToolTip('Reanexar à janela principal (Dock)')
+        else:
+            self.detach_btn.setToolTip('Destacar aba Topology em uma janela separada (Pop-out)')
+
+    def _toggle_detached(self) -> None:
+        if self._detached_window is not None:
+            self._reattach_to_main()
+        else:
+            self._detach_to_window()
+
+    def _detach_to_window(self) -> None:
+        if self._detached_window is not None:
+            return
+
+        if self._main is not None and hasattr(self._main, 'content_stack'):
+            stack = self._main.content_stack
+            idx = stack.indexOf(self)
+            if idx >= 0:
+                self._placeholder_widget = self._build_detached_placeholder()
+                stack.insertWidget(idx, self._placeholder_widget)
+                stack.removeWidget(self)
+
+        self._detached_window = DetachedTopologyWindow(self, title='Baleno — Topology')
+        self._update_detach_btn_ui(is_detached=True)
+        self._detached_window.show()
+        self._detached_window.raise_()
+        self._detached_window.activateWindow()
+
+    def _reattach_to_main(self) -> None:
+        if self._detached_window is None:
+            return
+        detached_win = self._detached_window
+        detached_win._reattaching = True
+
+        if self._main is not None and hasattr(self._main, 'content_stack'):
+            stack = self._main.content_stack
+            target_idx = -1
+            if self._placeholder_widget is not None:
+                target_idx = stack.indexOf(self._placeholder_widget)
+            if target_idx >= 0:
+                stack.insertWidget(target_idx, self)
+                stack.removeWidget(self._placeholder_widget)
+                self._placeholder_widget.deleteLater()
+                self._placeholder_widget = None
+                if hasattr(self._main, 'switch_tab'):
+                    self._main.switch_tab(target_idx)
+                else:
+                    stack.setCurrentIndex(target_idx)
+            else:
+                stack.addWidget(self)
+                stack.setCurrentWidget(self)
+
+        self._detached_window = None
+        detached_win.close()
+        self._update_detach_btn_ui(is_detached=False)
+        self.show()
+
+    def _focus_detached_window(self) -> None:
+        if self._detached_window is not None:
+            self._detached_window.show()
+            self._detached_window.raise_()
+            self._detached_window.activateWindow()
+
+    def _build_detached_placeholder(self) -> QWidget:
+        placeholder = QWidget()
+        placeholder.setObjectName('topologyPlaceholder')
+        placeholder.setStyleSheet(f"""
+            QWidget#topologyPlaceholder {{
+                background-color: {_BG};
+            }}
+            QLabel {{
+                color: {_TEXT};
+                background: transparent;
+            }}
+        """)
+        vbox = QVBoxLayout(placeholder)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.setSpacing(14)
+
+        ico_label = QLabel()
+        ico = self._get_icon('topology', 48)
+        if ico:
+            pix = ico.pixmap(48, 48)
+            ico_label.setPixmap(pix)
+            ico_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            vbox.addWidget(ico_label)
+
+        title = QLabel('Topologia aberta em janela separada')
+        title_font = QFont('Sans', 14, QFont.Weight.Bold)
+        title.setFont(title_font)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(title)
+
+        desc = QLabel('A visualização da topologia está sendo exibida em uma janela flutuante independente.')
+        desc.setStyleSheet(f'color: {_TEXT_MUTED}; font-size: 10pt;')
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vbox.addWidget(desc)
+
+        btn_box = QHBoxLayout()
+        btn_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_box.setSpacing(12)
+
+        focus_btn = QPushButton('Trazer para a frente')
+        focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        focus_btn.clicked.connect(self._focus_detached_window)
+        btn_box.addWidget(focus_btn)
+
+        reattach_btn = QPushButton('Reanexar à janela principal')
+        reattach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        reattach_btn.clicked.connect(self._reattach_to_main)
+        btn_box.addWidget(reattach_btn)
+
+        vbox.addLayout(btn_box)
+        return placeholder
 
     def _on_create_layer_requested(self, name: str, hex_code: str) -> None:
         if self._graph is None:
