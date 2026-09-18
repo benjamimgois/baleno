@@ -28,6 +28,7 @@ optdepends=(
     'tigervnc: VNC viewer'
     'freerdp: RDP client'
     'python-pyftpdlib: built-in FTP server'
+    'speedtest-cli: speedtest.net speed test support'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/benjamimgois/opengrid/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
