@@ -15,8 +15,8 @@ from typing import Optional
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPainterPathStroker,
-    QPen, QPolygonF,
+    QColor, QFont, QFontMetricsF, QIcon, QImage, QPainter, QPainterPath, QPainterPathStroker,
+    QPen, QPixmap, QPolygonF,
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -39,7 +39,8 @@ from balenolib.topology.undo import (
 )
 
 __all__ = ['TopologyView', 'TopologyScene', 'NodeItem', 'EdgeItem',
-           'GroupNodeItem', 'GroupLinkItem', 'load_graph', 'role_renderer']
+           'GroupNodeItem', 'GroupLinkItem', 'load_graph', 'role_renderer',
+           'make_role_icon']
 
 # MIME type used to drag a device role from the palette onto the canvas.
 DEVICE_MIME = 'application/x-baleno-topology-device'
@@ -167,6 +168,20 @@ def device_renderer(device: Device) -> Optional[QSvgRenderer]:
     which caches a fixed-resolution pixmap and pixelates when scaled).
     """
     return role_renderer(device.role)
+
+
+def make_role_icon(role: DeviceRole, size: int = 16) -> QIcon:
+    """Render a device role vector SVG into a QIcon."""
+    renderer = role_renderer(role)
+    if renderer is None:
+        return QIcon()
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    renderer.render(painter, QRectF(0.0, 0.0, float(size), float(size)))
+    painter.end()
+    return QIcon(pix)
+
 
 # Hop-level colours: level 1 (seed network) = green, level 2 (LLDP neighbours)
 # = gray, deeper levels = a dimmer slate so the hierarchy stays readable.
@@ -433,6 +448,19 @@ class NodeItem(QGraphicsObject):
     def contextMenuEvent(self, event) -> None:
         self.context_menu_requested.emit(self.device, event.screenPos())
 
+    def get_layer_color(self) -> Optional[str]:
+        scene = self.scene()
+        if scene is None or not hasattr(scene, 'get_layer_color'):
+            return None
+        if not self.device.layers:
+            return None
+        sorted_layers = sorted(self.device.layers, key=lambda l: (len(l), l))
+        for layer in sorted_layers:
+            c = scene.get_layer_color(layer)
+            if c:
+                return c
+        return None
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -474,7 +502,11 @@ class NodeItem(QGraphicsObject):
         # icon circle
         role_color = ROLE_COLOR.get(self.device.role, UNKNOWN)
         icon_center = QPointF(rect.left() + 32, 0)
-        painter.setPen(QPen(QColor(30, 35, 42), 1))
+        layer_color = self.get_layer_color()
+        if layer_color:
+            painter.setPen(QPen(QColor(layer_color), 2.5))
+        else:
+            painter.setPen(QPen(QColor(30, 35, 42), 1))
         painter.setBrush(QColor(30, 35, 42))
         painter.drawEllipse(icon_center, 22, 22)
         renderer = device_renderer(self.device)
@@ -867,6 +899,17 @@ class TopologyScene(QGraphicsScene):
         super().drawBackground(painter, rect)
         _draw_grid(painter, rect)
 
+    def get_layer_color(self, layer_name: str) -> Optional[str]:
+        if not self.graph or not getattr(self.graph, 'layer_colors', None):
+            return None
+        colors = self.graph.layer_colors
+        if layer_name in colors:
+            return colors[layer_name]
+        m = re.match(r'^(.*?)-(\d+)$', layer_name)
+        if m and m.group(1) in colors:
+            return colors[m.group(1)]
+        return None
+
     def set_graph(self, graph: TopologyGraph, layout_mode: str = 'hierarchical',
                   positions: dict[str, tuple[float, float]] | None = None,
                   group_positions: dict[str, tuple[float, float]] | None = None) -> None:
@@ -1006,6 +1049,10 @@ class TopologyScene(QGraphicsScene):
             glink.setVisible(glink.source.isVisible())
 
     def _add_node(self, device: Device, pos: QPointF) -> NodeItem:
+        if self.graph is None:
+            self.graph = TopologyGraph()
+        if device.id not in self.graph.devices:
+            self.graph.devices[device.id] = device
         node = NodeItem(device)
         node.setPos(pos)
         node.double_clicked.connect(self.node_double_clicked)
@@ -1410,7 +1457,11 @@ class TopologyView(QGraphicsView):
         self._scene = TopologyScene()
         self.setScene(self._scene)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self._interaction_mode = 'select'
+        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self._middle_pan_active = False
+        self._middle_pan_pos = None
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
@@ -1615,6 +1666,51 @@ class TopologyView(QGraphicsView):
         self._zoom = max(0.1, min(self._zoom, 8.0))
         self.scale(factor, factor)
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._middle_pan_active = True
+            self._middle_pan_pos = event.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._middle_pan_active and self._middle_pan_pos is not None:
+            delta = event.pos() - self._middle_pan_pos
+            self._middle_pan_pos = event.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton and self._middle_pan_active:
+            self._middle_pan_active = False
+            self._middle_pan_pos = None
+            if self._scene._link_mode:
+                self.setCursor(Qt.CursorShape.CrossCursor)
+            else:
+                self._update_interaction_mode()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def set_interaction_mode(self, mode: str) -> None:
+        """Set active interaction mode: 'select' (rubber band drag) or 'pan' (hand drag)."""
+        self._interaction_mode = mode
+        if not self._scene._link_mode:
+            self._update_interaction_mode()
+
+    def _update_interaction_mode(self) -> None:
+        if self._interaction_mode == 'pan':
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
     def load(self, graph: TopologyGraph, layout_mode: str = 'hierarchical') -> None:
         saved = load_layout(self.layout_path) if self.layout_path else {}
         saved_groups = load_group_layout(self.layout_path) if self.layout_path else {}
@@ -1789,8 +1885,7 @@ class TopologyView(QGraphicsView):
             self.setCursor(Qt.CursorShape.CrossCursor)
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         else:
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self._update_interaction_mode()
 
     def add_manual_link(self, source_id: str, source_port: str,
                         target_id: str, target_port: str,
@@ -1973,6 +2068,51 @@ class TopologyView(QGraphicsView):
                     iface.oper_status = status
         for edge in self._scene.edge_items:
             edge.refresh_state()
+
+    def update_layer_color(self, layer_name: str, color_hex: str) -> None:
+        """Update layer color in graph and repaint all affected nodes."""
+        if self._scene.graph is not None:
+            if not hasattr(self._scene.graph, 'layer_colors') or self._scene.graph.layer_colors is None:
+                self._scene.graph.layer_colors = {}
+            self._scene.graph.layer_colors[layer_name] = color_hex
+        for node in self._scene.node_items.values():
+            node.update()
+        self._schedule_save()
+
+    def change_device_role(self, device_id: str, new_role: DeviceRole) -> None:
+        """Update role of a device and redraw its node."""
+        device = None
+        node = self._scene.node_items.get(device_id)
+        if node is not None:
+            device = node.device
+        elif self._scene.graph is not None:
+            device = self._scene.graph.devices.get(device_id)
+        if device is None:
+            return
+        device.role = new_role
+        if node is not None:
+            node.refresh_tooltip()
+            node.update()
+        self._schedule_save()
+
+    def change_device_layer(self, device_id: str, new_layer: str) -> None:
+        """Move a device to a new layer, updating layers and redrawing node."""
+        device = None
+        node = self._scene.node_items.get(device_id)
+        if node is not None:
+            device = node.device
+        elif self._scene.graph is not None:
+            device = self._scene.graph.devices.get(device_id)
+        if device is None:
+            return
+        m = re.search(r'-(\d+)$', new_layer)
+        device.layer = int(m.group(1)) if m else 1
+        device.layers = {new_layer}
+        if node is not None:
+            node.refresh_tooltip()
+            node.update()
+        self._schedule_save()
+
 
 
 def load_graph(graph: TopologyGraph, layout_mode: str = 'hierarchical') -> TopologyView:

@@ -46,7 +46,8 @@ class TopologyDiscoveryWorker(QThread):
 
     def __init__(self, networks: list[str], credentials: SnmpCredentials,
                  communities: Optional[list[str]] = None, config=None,
-                 max_devices: int = 250, layer_name: str = '', parent=None):
+                 max_devices: int = 250, layer_name: str = '',
+                 mode: str = 'deep', layer_color: str = '', parent=None):
         super().__init__(parent)
         self.networks = networks
         self.credentials = credentials
@@ -54,6 +55,8 @@ class TopologyDiscoveryWorker(QThread):
         self.config = config
         self.max_devices = max_devices
         self.layer_name = layer_name
+        self.mode = (mode or 'deep').lower()
+        self.layer_color = layer_color or ''
         self._stop = False
         self._scanner: Optional[PingScanner] = None
 
@@ -72,62 +75,75 @@ class TopologyDiscoveryWorker(QThread):
                 return
 
             devices: list[Device] = []
-            worklist = deque(reachable.keys())
-            queued = set(worklist)
-            seed_total = len(worklist)
-            processed = 0
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
-                while worklist:
+            if self.mode == 'basic':
+                self.progress.emit(60, f"Discovered {len(reachable)} active hosts…")
+                for ip, rtt in reachable.items():
                     if self._stop:
                         return
-                    if len(devices) >= self.max_devices:
-                        break
-                    wave = []
-                    while worklist and len(wave) < MAX_CONCURRENT:
-                        wave.append(worklist.popleft())
-                    futures = {pool.submit(self._collect_ip, ip): ip for ip in wave}
-                    for fut in concurrent.futures.as_completed(futures):
+                    dev = Device(id=ip, ip=ip, status='up', latency_ms=rtt, role=DeviceRole.HOST)
+                    devices.append(dev)
+                    self.device_found.emit(dev)
+            else:
+                worklist = deque(reachable.keys())
+                queued = set(worklist)
+                seed_total = len(worklist)
+                processed = 0
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
+                    while worklist:
                         if self._stop:
                             return
-                        ip = futures[fut]
-                        device, community = fut.result()
-                        rtt = reachable.get(ip, 0.0)
-                        processed += 1
-                        frac = processed / max(seed_total, len(worklist) + processed, 1)
-                        self.progress.emit(5 + min(70, int(70 * frac)), f"LLDP {ip}…")
+                        if len(devices) >= self.max_devices:
+                            break
+                        wave = []
+                        while worklist and len(wave) < MAX_CONCURRENT:
+                            wave.append(worklist.popleft())
+                        futures = {pool.submit(self._collect_ip, ip): ip for ip in wave}
+                        for fut in concurrent.futures.as_completed(futures):
+                            if self._stop:
+                                return
+                            ip = futures[fut]
+                            device, community = fut.result()
+                            rtt = reachable.get(ip, 0.0)
+                            processed += 1
+                            frac = processed / max(seed_total, len(worklist) + processed, 1)
+                            self.progress.emit(5 + min(70, int(70 * frac)), f"LLDP {ip}…")
 
-                        if device is None:
-                            if ip in reachable:
-                                orphan = Device(id=ip, ip=ip, status='up',
-                                                latency_ms=rtt)
-                                devices.append(orphan)
-                                self.device_found.emit(orphan)
-                            continue
+                            if device is None:
+                                if ip in reachable:
+                                    orphan = Device(id=ip, ip=ip, status='up',
+                                                    latency_ms=rtt)
+                                    devices.append(orphan)
+                                    self.device_found.emit(orphan)
+                                continue
 
-                        if community and self.config is not None:
-                            self.config.set_snmp_ip_community(ip, community)
-                        device.latency_ms = rtt
-                        if not device.ip:
-                            device.ip = ip
-                        device.status = 'up'
-                        devices.append(device)
-                        self.device_found.emit(device)
+                            if community and self.config is not None:
+                                self.config.set_snmp_ip_community(ip, community)
+                            device.latency_ms = rtt
+                            if not device.ip:
+                                device.ip = ip
+                            device.status = 'up'
+                            devices.append(device)
+                            self.device_found.emit(device)
 
-                        # LLDP-driven expansion: probe neighbour management
-                        # addresses even when they never answered ICMP.
-                        for n in device.lldp_neighbors:
-                            mgmt = n.remote_mgmt_addr
-                            if mgmt and mgmt not in queued:
-                                queued.add(mgmt)
-                                worklist.append(mgmt)
+                            # LLDP-driven expansion: probe neighbour management
+                            # addresses even when they never answered ICMP.
+                            for n in device.lldp_neighbors:
+                                mgmt = n.remote_mgmt_addr
+                                if mgmt and mgmt not in queued:
+                                    queued.add(mgmt)
+                                    worklist.append(mgmt)
 
-            self._add_placeholders(devices)
-            self._resolve_missing_ips(devices)
+                self._add_placeholders(devices)
+                self._resolve_missing_ips(devices)
 
             self.progress.emit(90, "Building topology graph…")
             graph = TopologyEngine().build(devices, seed_networks=self.networks)
             self._assign_layers(graph)
+            if self.layer_color:
+                name = self.layer_name or (self.networks[0].split('/')[0] if self.networks else 'map')
+                graph.layer_colors[name] = self.layer_color
             self.progress.emit(100, f"Done — {len(graph.devices)} nodes, "
                                     f"{len(graph.links)} links")
             self.finished.emit(graph)

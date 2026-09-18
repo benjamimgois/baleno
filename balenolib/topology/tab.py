@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QComboBox, QProgressBar, QMessageBox,
     QApplication, QMenu, QToolButton, QFileDialog, QScrollArea, QDialog,
+    QColorDialog,
 )
 
 from balenolib.topology.collector import SnmpCredentials
@@ -30,7 +31,7 @@ from balenolib.topology.models import Device, DeviceRole, TopologyGraph
 from balenolib.topology.gui.view import (
     TopologyView, DEVICE_MIME, role_renderer, GroupNodeItem,
 )
-from balenolib.topology.gui.layers import LayerTreeWidget
+from balenolib.topology.gui.layers import LayerTreeWidget, make_color_icon
 from balenolib.topology.gui.accordion import AccordionWidget, CollapsibleSection
 from balenolib.topology.gui.detail import (
     DeviceDetailDialog, GroupDevicesDialog, LinkCreationDialog,
@@ -481,15 +482,24 @@ class TopologyTab(QWidget):
 
         layout.addWidget(self._vsep())
 
-        # 6. Layout mode
-        layout.addWidget(QLabel('Layout:'))
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItem('Tree', 'hierarchical')
-        self.layout_combo.addItem('Force', 'force')
-        self.layout_combo.addItem('Radial', 'concentric')
-        self.layout_combo.addItem('BFS', 'bfs')
-        self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
-        layout.addWidget(self.layout_combo)
+        # 6. Interaction modes: Select vs Pan
+        self.select_mode_btn = QToolButton()
+        self.select_mode_btn.setText('↖ Select')
+        self.select_mode_btn.setCheckable(True)
+        self.select_mode_btn.setChecked(True)
+        self.select_mode_btn.setToolTip('Selection Mode: drag a box to select multiple devices')
+        self.select_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.select_mode_btn.clicked.connect(lambda: self._set_interaction_mode('select'))
+        layout.addWidget(self.select_mode_btn)
+
+        self.pan_mode_btn = QToolButton()
+        self.pan_mode_btn.setText('✋ Pan')
+        self.pan_mode_btn.setCheckable(True)
+        self.pan_mode_btn.setChecked(False)
+        self.pan_mode_btn.setToolTip('Pan Mode: drag canvas to move view (Middle-click also pans)')
+        self.pan_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pan_mode_btn.clicked.connect(lambda: self._set_interaction_mode('pan'))
+        layout.addWidget(self.pan_mode_btn)
 
         layout.addStretch(1)
 
@@ -573,6 +583,8 @@ class TopologyTab(QWidget):
         self.layer_tree.layers_visibility_changed.connect(self._on_layers_visibility_changed)
         self.layer_tree.fit_layer_requested.connect(self.view.fit_layer)
         self.layer_tree.remove_layer_requested.connect(self._on_remove_layer_requested)
+        self.layer_tree.layer_color_changed.connect(self._on_layer_color_changed)
+        self.layer_tree.create_layer_requested.connect(self._on_create_layer_requested)
         self.layer_tree.setMinimumHeight(350)
         box_layout.addWidget(self.layer_tree)
         return box
@@ -583,15 +595,35 @@ class TopologyTab(QWidget):
         box_layout.setContentsMargins(4, 4, 4, 4)
         box_layout.setSpacing(6)
 
+        box_layout.addWidget(QLabel('Discovery Mode:'))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem('Deep (ICMP + LLDP)', 'deep')
+        self.mode_combo.addItem('Basic (ICMP Only)', 'basic')
+        self.mode_combo.currentIndexChanged.connect(self._on_discovery_mode_changed)
+        box_layout.addWidget(self.mode_combo)
+
         box_layout.addWidget(QLabel('Networks (CIDR or IP):'))
         self.networks_edit = QLineEdit()
         self.networks_edit.setPlaceholderText('10.0.0.0/24, 192.168.1.0/24')
         box_layout.addWidget(self.networks_edit)
 
-        box_layout.addWidget(QLabel('Layer Name:'))
+        box_layout.addWidget(QLabel('Layer Name & Color:'))
+        layer_row = QHBoxLayout()
+        layer_row.setSpacing(4)
         self.layer_name_edit = QLineEdit()
         self.layer_name_edit.setPlaceholderText('Network-A')
-        box_layout.addWidget(self.layer_name_edit)
+        layer_row.addWidget(self.layer_name_edit, 1)
+
+        self._selected_layer_color = '#3B82F6'
+        self.layer_color_btn = QToolButton()
+        self.layer_color_btn.setFixedSize(28, 28)
+        self.layer_color_btn.setToolTip('Pick layer color')
+        self.layer_color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.layer_color_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.layer_color_btn.setMenu(self._build_layer_color_menu())
+        self._set_selected_layer_color('#3B82F6')
+        layer_row.addWidget(self.layer_color_btn)
+        box_layout.addLayout(layer_row)
 
         self.snmp_btn = QToolButton()
         self.snmp_btn.setText('⚙ SNMP: v2c ▾')
@@ -616,6 +648,69 @@ class TopologyTab(QWidget):
         box_layout.addWidget(self.status_label)
 
         return box
+
+    def _on_discovery_mode_changed(self) -> None:
+        mode = self.mode_combo.currentData()
+        if mode == 'basic':
+            self.snmp_btn.setEnabled(False)
+            self.snmp_btn.setToolTip('SNMP is disabled in Basic (ICMP Only) mode')
+        else:
+            self.snmp_btn.setEnabled(True)
+            self.snmp_btn.setToolTip('SNMP version and credentials')
+
+    def _build_layer_color_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {_BG};
+                color: {_TEXT};
+                border: 1px solid {_BORDER};
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {_ROYAL};
+                color: #FFFFFF;
+            }}
+        """)
+        palettes = [
+            ('#3B82F6', 'Blue'),
+            ('#10B981', 'Emerald'),
+            ('#8B5CF6', 'Purple'),
+            ('#F59E0B', 'Amber'),
+            ('#EF4444', 'Crimson'),
+            ('#06B6D4', 'Cyan'),
+            ('#F97316', 'Orange'),
+            ('#6B7280', 'Slate'),
+        ]
+        for hex_code, name in palettes:
+            act = menu.addAction(name)
+            act.setIcon(make_color_icon(hex_code, 14))
+            act.triggered.connect(lambda checked=False, h=hex_code: self._set_selected_layer_color(h))
+        menu.addSeparator()
+        custom_act = menu.addAction('Custom Color…')
+        custom_act.triggered.connect(self._choose_custom_layer_color)
+        return menu
+
+    def _set_selected_layer_color(self, hex_code: str) -> None:
+        self._selected_layer_color = hex_code
+        self.layer_color_btn.setIcon(make_color_icon(hex_code, 16))
+
+    def _choose_custom_layer_color(self) -> None:
+        initial = QColor(self._selected_layer_color or '#3B82F6')
+        color = QColorDialog.getColor(initial, self, 'Select Layer Color')
+        if color.isValid():
+            self._set_selected_layer_color(color.name())
+
+    def _on_layer_color_changed(self, name: str, hex_code: str) -> None:
+        if self._graph is not None:
+            if not hasattr(self._graph, 'layer_colors') or self._graph.layer_colors is None:
+                self._graph.layer_colors = {}
+            self._graph.layer_colors[name] = hex_code
+        self.view.update_layer_color(name, hex_code)
 
     def _toggle_sidebar(self, visible: bool) -> None:
         self._sidebar_anim.stop()
@@ -662,15 +757,38 @@ class TopologyTab(QWidget):
             self._search_match_idx += 1
             self.view.focus_device(target_id)
 
-    # ── Actions & Layouts ────────────────────────────────────────────────
+    # ── Actions & Interactions ───────────────────────────────────────────
 
-    def _on_layout_changed(self) -> None:
-        mode = self.layout_combo.currentData()
-        if self._graph is not None:
-            self.view.switch_layout(mode)
+    def _set_interaction_mode(self, mode: str) -> None:
+        if mode == 'select':
+            self.select_mode_btn.blockSignals(True)
+            self.pan_mode_btn.blockSignals(True)
+            self.select_mode_btn.setChecked(True)
+            self.pan_mode_btn.setChecked(False)
+            self.select_mode_btn.blockSignals(False)
+            self.pan_mode_btn.blockSignals(False)
+        else:
+            self.select_mode_btn.blockSignals(True)
+            self.pan_mode_btn.blockSignals(True)
+            self.select_mode_btn.setChecked(False)
+            self.pan_mode_btn.setChecked(True)
+            self.select_mode_btn.blockSignals(False)
+            self.pan_mode_btn.blockSignals(False)
+        self.view.set_interaction_mode(mode)
+
+    def _on_create_layer_requested(self, name: str, hex_code: str) -> None:
+        if self._graph is None:
+            self._graph = TopologyGraph()
+        if not hasattr(self._graph, 'layer_colors') or self._graph.layer_colors is None:
+            self._graph.layer_colors = {}
+        self._graph.layer_colors[name] = hex_code
+        self.layer_tree.populate(self._graph, self._hidden_layers())
+        self.view.update_layer_color(name, hex_code)
+        self.view.save_map()
+        self.status_label.setText(f"Layer '{name}' created")
 
     def _current_layout(self) -> str:
-        return self.layout_combo.currentData() or 'hierarchical'
+        return 'hierarchical'
 
     def _save_map(self) -> None:
         self.view.save_map()
@@ -739,11 +857,15 @@ class TopologyTab(QWidget):
         self._remember()
         creds = self._credentials()
         layer_name = self.layer_name_edit.text().strip()
+        mode = self.mode_combo.currentData() if hasattr(self, 'mode_combo') else 'deep'
+        layer_color = self._selected_layer_color if hasattr(self, '_selected_layer_color') else ''
         self._worker = TopologyDiscoveryWorker(
             networks, creds,
             communities=self._community_list(),
             config=self._config,
             layer_name=layer_name,
+            mode=mode,
+            layer_color=layer_color,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.device_found.connect(self._on_device_found)
@@ -777,6 +899,11 @@ class TopologyTab(QWidget):
             else:
                 new_ids = set(graph.devices.keys()) - set(self._graph.devices.keys())
                 self._merge_graphs(self._graph, graph)
+            layer_name = self.layer_name_edit.text().strip()
+            if layer_name and hasattr(self, '_selected_layer_color') and self._selected_layer_color:
+                if not hasattr(self._graph, 'layer_colors') or self._graph.layer_colors is None:
+                    self._graph.layer_colors = {}
+                self._graph.layer_colors[layer_name] = self._selected_layer_color
             self.view.load_merged(self._graph, new_ids, self._current_layout())
             self.layer_tree.populate(self._graph, self._hidden_layers())
             self.view.set_visible_layers(self.layer_tree._visible_layers)
@@ -807,6 +934,10 @@ class TopologyTab(QWidget):
         for link in incoming.links:
             if not any(link.key() == l.key() for l in target.links):
                 target.links.append(link)
+        if hasattr(incoming, 'layer_colors') and incoming.layer_colors:
+            if not hasattr(target, 'layer_colors') or target.layer_colors is None:
+                target.layer_colors = {}
+            target.layer_colors.update(incoming.layer_colors)
 
     def _on_failed(self, message: str) -> None:
         self._worker = None

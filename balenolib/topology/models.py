@@ -234,6 +234,7 @@ class TopologyGraph:
     orphans: list[str] = field(default_factory=list)      # ICMP-only, no LLDP link
     loops: list[list[str]] = field(default_factory=list)  # detected cycles
     lags: list[list[PortLink]] = field(default_factory=list)
+    layer_colors: dict[str, str] = field(default_factory=dict)
 
     def add_device(self, device: Device) -> None:
         self.devices[device.id] = device
@@ -245,11 +246,13 @@ class TopologyGraph:
         return {
             'devices': {did: dev.to_dict() for did, dev in self.devices.items()},
             'links': [link.to_dict() for link in self.links],
+            'layer_colors': dict(self.layer_colors),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> 'TopologyGraph':
         graph = cls()
+        graph.layer_colors = dict(data.get('layer_colors') or {})
         for did, ddata in (data.get('devices') or {}).items():
             device = Device.from_dict(ddata)
             if device.id:

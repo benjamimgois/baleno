@@ -121,6 +121,7 @@ def save_map(graph: TopologyGraph, positions: dict[str, tuple[float, float]],
                       if k in graph.devices},
         'groups': {k: _round(v) for k, v in (group_positions or {}).items()
                    if k in graph.devices},
+        'layer_colors': dict(getattr(graph, 'layer_colors', {})),
     }
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, 'w') as f:

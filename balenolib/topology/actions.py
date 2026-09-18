@@ -187,6 +187,72 @@ class TopologyActions:
             for sub in (access, scan, traceroute, snmp, transfer):
                 sub.setEnabled(False)
 
+        menu.addSeparator()
+
+        # Device Type submenu
+        type_menu = menu.addMenu('Device Type')
+        from balenolib.topology.models import DeviceRole
+        from balenolib.topology.gui.view import make_role_icon
+        from balenolib.topology.gui.layers import make_color_icon
+
+        _ROLE_ITEMS = [
+            (DeviceRole.ROUTER, 'Router'),
+            (DeviceRole.CORE, 'Core Switch (L3)'),
+            (DeviceRole.SWITCH, 'Switch (L2)'),
+            (DeviceRole.ACCESS, 'Access Switch'),
+            (DeviceRole.FIREWALL, 'Firewall'),
+            (DeviceRole.SERVER, 'Server'),
+            (DeviceRole.AP, 'Access Point (Wi-Fi)'),
+            (DeviceRole.HOST, 'Host (PC)'),
+            (DeviceRole.PHONE, 'IP Phone'),
+            (DeviceRole.CAMERA, 'Camera'),
+            (DeviceRole.CLOUD, 'Cloud'),
+            (DeviceRole.INTERNET, 'Internet'),
+        ]
+
+        type_actions: list[tuple[Any, DeviceRole]] = []
+        for role, label in _ROLE_ITEMS:
+            act = type_menu.addAction(label)
+            icon = make_role_icon(role, 16)
+            if not icon.isNull():
+                act.setIcon(icon)
+            act.setCheckable(True)
+            if device.role == role:
+                act.setChecked(True)
+            type_actions.append((act, role))
+
+        # Layer submenu
+        layer_menu = menu.addMenu('Layer')
+        topo_page = getattr(main_window, 'topology_page', None)
+        graph = getattr(topo_page, '_graph', None) if topo_page else None
+        known_layers: set[str] = set()
+        if topo_page and hasattr(topo_page, 'layer_tree') and hasattr(topo_page.layer_tree, '_all_layers'):
+            known_layers.update(topo_page.layer_tree._all_layers)
+        if graph:
+            if hasattr(graph, 'layer_colors') and graph.layer_colors:
+                known_layers.update(graph.layer_colors.keys())
+            if hasattr(graph, 'devices'):
+                for d in graph.devices.values():
+                    known_layers.update(d.layers)
+
+        act_new_layer = layer_menu.addAction('+ Move to New Layer…')
+        layer_menu.addSeparator()
+
+        layer_actions: list[tuple[Any, str]] = []
+        for layer_name in sorted(known_layers):
+            act = layer_menu.addAction(layer_name)
+            act.setCheckable(True)
+            if layer_name in device.layers:
+                act.setChecked(True)
+            color_hex = None
+            if topo_page and hasattr(topo_page, 'layer_tree'):
+                color_hex = topo_page.layer_tree.get_layer_color(layer_name)
+            elif graph and hasattr(graph, 'layer_colors'):
+                color_hex = graph.layer_colors.get(layer_name)
+            if color_hex:
+                act.setIcon(make_color_icon(color_hex, 14))
+            layer_actions.append((act, layer_name))
+
         remove_act = None
         if include_remove:
             menu.addSeparator()
@@ -228,8 +294,70 @@ class TopologyActions:
             TopologyActions._invoke_transfer(main_window, device, 'FTP')
         elif chosen is t_tftp:
             TopologyActions._invoke_transfer(main_window, device, 'TFTP')
+        else:
+            for act, role in type_actions:
+                if chosen is act:
+                    TopologyActions._change_device_role(main_window, device, role)
+                    return
+            if chosen is act_new_layer:
+                TopologyActions._move_device_to_new_layer(main_window, device)
+                return
+            for act, layer_name in layer_actions:
+                if chosen is act:
+                    TopologyActions._change_device_layer(main_window, device, layer_name)
+                    return
 
     # ── invokers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _change_device_role(main_window, device, new_role: DeviceRole) -> None:
+        device.role = new_role
+        topo_page = getattr(main_window, 'topology_page', None)
+        view = getattr(topo_page, 'view', None) if topo_page else None
+        if view is not None:
+            view.change_device_role(device.id, new_role)
+        if topo_page is not None and hasattr(topo_page, 'layer_tree') and topo_page._graph is not None:
+            topo_page.layer_tree.populate(topo_page._graph, topo_page._hidden_layers())
+
+    @staticmethod
+    def _change_device_layer(main_window, device, new_layer: str) -> None:
+        import re
+        m = re.search(r'-(\d+)$', new_layer)
+        device.layer = int(m.group(1)) if m else 1
+        device.layers = {new_layer}
+        topo_page = getattr(main_window, 'topology_page', None)
+        view = getattr(topo_page, 'view', None) if topo_page else None
+        if view is not None:
+            view.change_device_layer(device.id, new_layer)
+        if topo_page is not None and hasattr(topo_page, 'layer_tree') and topo_page._graph is not None:
+            topo_page.layer_tree.populate(topo_page._graph, topo_page._hidden_layers())
+            if view is not None:
+                view.set_visible_layers(topo_page.layer_tree._visible_layers)
+
+    @staticmethod
+    def _move_device_to_new_layer(main_window, device) -> None:
+        from PyQt6.QtWidgets import QInputDialog, QColorDialog
+        from PyQt6.QtGui import QColor
+
+        name, ok = QInputDialog.getText(
+            main_window, 'Move to New Layer', 'New layer name:'
+        )
+        name = name.strip()
+        if not ok or not name:
+            return
+
+        color = QColorDialog.getColor(QColor('#3B82F6'), main_window, f'Select Color for Layer {name}')
+        color_hex = color.name() if color.isValid() else '#3B82F6'
+
+        topo_page = getattr(main_window, 'topology_page', None)
+        if topo_page is not None:
+            if topo_page._graph is not None:
+                if not hasattr(topo_page._graph, 'layer_colors') or topo_page._graph.layer_colors is None:
+                    topo_page._graph.layer_colors = {}
+                topo_page._graph.layer_colors[name] = color_hex
+            if hasattr(topo_page, 'layer_tree'):
+                topo_page.layer_tree.set_layer_color(name, color_hex)
+        TopologyActions._change_device_layer(main_window, device, name)
 
     @staticmethod
     def _remove_node(main_window, device) -> None:

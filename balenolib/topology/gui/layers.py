@@ -10,14 +10,15 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QPointF, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
     QTreeWidgetItem, QMenu, QPushButton, QHeaderView, QMessageBox,
+    QColorDialog, QInputDialog,
 )
 
-__all__ = ['LayerTreeWidget', 'make_eye_icon']
+__all__ = ['LayerTreeWidget', 'make_eye_icon', 'make_color_icon']
 
 _BG = '#161B22'
 _BG_DARK = '#0D1117'
@@ -77,6 +78,19 @@ def make_eye_icon(state: str = 'visible', size: int = 18) -> QIcon:
     return QIcon(pix)
 
 
+def make_color_icon(color_hex: str, size: int = 14) -> QIcon:
+    """Draw a small circular color swatch icon for a layer."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QColor(color_hex))
+    p.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+    p.drawEllipse(QRectF(1.0, 1.0, float(size - 2), float(size - 2)))
+    p.end()
+    return QIcon(pix)
+
+
 def parse_layer_prefix(layer: str) -> tuple[str, int]:
     """Extract discovery group prefix and hop depth from a layer name.
 
@@ -99,11 +113,16 @@ class LayerTreeWidget(QWidget):
     fit_layer_requested = pyqtSignal(set)
     # Emitted when user asks to remove specific layer(s) from map
     remove_layer_requested = pyqtSignal(set)
+    # Emitted when a layer or group color is updated: (layer_name, hex_color)
+    layer_color_changed = pyqtSignal(str, str)
+    # Emitted when user creates a manual layer: (layer_name, hex_color)
+    create_layer_requested = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._visible_layers: set[str] = set()
         self._all_layers: set[str] = set()
+        self._layer_colors: dict[str, str] = {}
         self._layer_counts: dict[str, int] = {}
         self._group_children: dict[str, list[str]] = {}
 
@@ -133,6 +152,28 @@ class LayerTreeWidget(QWidget):
         self.summary_label.setFont(QFont('Sans', 8))
         self.summary_label.setStyleSheet(f'color: {_TEXT_MUTED};')
         header.addWidget(self.summary_label)
+
+        self.btn_new_layer = QPushButton('+ New')
+        self.btn_new_layer.setToolTip('Create a new layer')
+        self.btn_new_layer.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_layer.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_BG};
+                color: {_TEXT};
+                border: 1px solid {_BORDER};
+                border-radius: 4px;
+                padding: 2px 7px;
+                font-size: 8pt;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #21262D;
+                color: #FFFFFF;
+                border-color: {_ROYAL};
+            }}
+        """)
+        self.btn_new_layer.clicked.connect(self._prompt_create_layer)
+        header.addWidget(self.btn_new_layer)
         layout.addLayout(header)
 
         # Tree Widget
@@ -232,16 +273,20 @@ class LayerTreeWidget(QWidget):
         self._all_layers.clear()
         self._layer_counts.clear()
         self._group_children.clear()
-
-        if graph is None or not graph.devices:
-            self.summary_label.setText('0 layers')
-            return
+        self._layer_colors = dict(getattr(graph, 'layer_colors', {}) or {})
 
         # Count occurrences of each layer
-        for dev in graph.devices.values():
-            for layer in dev.layers:
-                self._all_layers.add(layer)
-                self._layer_counts[layer] = self._layer_counts.get(layer, 0) + 1
+        if graph is not None and getattr(graph, 'devices', None):
+            for dev in graph.devices.values():
+                for layer in dev.layers:
+                    self._all_layers.add(layer)
+                    self._layer_counts[layer] = self._layer_counts.get(layer, 0) + 1
+
+        # Also include manual layers defined in layer_colors
+        for layer in self._layer_colors:
+            self._all_layers.add(layer)
+            if layer not in self._layer_counts:
+                self._layer_counts[layer] = 0
 
         if not self._all_layers:
             self.summary_label.setText('0 layers')
@@ -267,10 +312,12 @@ class LayerTreeWidget(QWidget):
             )
 
             total_nodes = sum(self._layer_counts.get(l, 0) for l in sorted_children)
+            group_color = self.get_layer_color(group_name) or '#3B82F6'
 
             group_item = QTreeWidgetItem(self.tree)
             group_item.setData(0, Qt.ItemDataRole.UserRole, ('group', group_name))
-            group_item.setText(1, f'📁 {group_name}')
+            group_item.setIcon(1, make_color_icon(group_color))
+            group_item.setText(1, f'{group_name}')
             group_item.setText(2, f'({total_nodes})')
             group_item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             group_item.setFont(1, QFont('Sans', 9, QFont.Weight.Bold))
@@ -279,8 +326,10 @@ class LayerTreeWidget(QWidget):
             for child_layer in sorted_children:
                 _, hop = parse_layer_prefix(child_layer)
                 tag = ' (seeds)' if hop == 1 else f' (hop {hop})'
+                child_color = self.get_layer_color(child_layer) or group_color
                 child_item = QTreeWidgetItem(group_item)
                 child_item.setData(0, Qt.ItemDataRole.UserRole, ('layer', child_layer))
+                child_item.setIcon(1, make_color_icon(child_color))
                 child_item.setText(1, f'{child_layer}{tag}')
                 child_item.setText(2, f'({self._layer_counts.get(child_layer, 0)})')
                 child_item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -294,6 +343,54 @@ class LayerTreeWidget(QWidget):
             # Update parent group icon (all, none, or partial)
             self._update_group_icon(group_item, sorted_children)
             group_item.setExpanded(True)
+
+    def get_layer_color(self, layer_name: str) -> Optional[str]:
+        if layer_name in self._layer_colors:
+            return self._layer_colors[layer_name]
+        prefix, _ = parse_layer_prefix(layer_name)
+        if prefix in self._layer_colors:
+            return self._layer_colors[prefix]
+        return None
+
+    def set_layer_color(self, name: str, hex_code: str) -> None:
+        self._layer_colors[name] = hex_code
+        icon = make_color_icon(hex_code)
+        for i in range(self.tree.topLevelItemCount()):
+            group_item = self.tree.topLevelItem(i)
+            p_data = group_item.data(0, Qt.ItemDataRole.UserRole)
+            if p_data and p_data[1] == name:
+                group_item.setIcon(1, icon)
+                for j in range(group_item.childCount()):
+                    child = group_item.child(j)
+                    c_data = child.data(0, Qt.ItemDataRole.UserRole)
+                    if c_data and c_data[1] not in self._layer_colors:
+                        child.setIcon(1, icon)
+            elif p_data:
+                for j in range(group_item.childCount()):
+                    child = group_item.child(j)
+                    c_data = child.data(0, Qt.ItemDataRole.UserRole)
+                    if c_data and c_data[1] == name:
+                        child.setIcon(1, icon)
+
+    def _prompt_layer_color(self, name: str, kind: str) -> None:
+        initial = QColor(self.get_layer_color(name) or '#3B82F6')
+        color = QColorDialog.getColor(initial, self, f'Select Color for {name}')
+        if color.isValid():
+            hex_code = color.name()
+            self.set_layer_color(name, hex_code)
+            self.layer_color_changed.emit(name, hex_code)
+
+    def _prompt_create_layer(self) -> None:
+        name, ok = QInputDialog.getText(self, 'Create New Layer', 'Layer name:')
+        name = name.strip() if name else ''
+        if not ok or not name:
+            return
+        if name in self._all_layers:
+            QMessageBox.information(self, 'Layers', f"Layer '{name}' already exists.")
+            return
+        color = QColorDialog.getColor(QColor('#3B82F6'), self, f"Select Color for Layer '{name}'")
+        color_hex = color.name() if color.isValid() else '#3B82F6'
+        self.create_layer_requested.emit(name, color_hex)
 
     def _update_group_icon(self, group_item: QTreeWidgetItem, child_layers: list[str]) -> None:
         vis_count = sum(1 for l in child_layers if l in self._visible_layers)
@@ -388,13 +485,6 @@ class LayerTreeWidget(QWidget):
 
     def _on_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
-        if item is None:
-            return
-        data = item.data(0, Qt.ItemDataRole.UserRole)
-        if not data:
-            return
-        kind, name = data
-
         menu = QMenu(self)
         menu.setStyleSheet(f"""
             QMenu {{
@@ -417,6 +507,17 @@ class LayerTreeWidget(QWidget):
                 margin: 4px 8px;
             }}
         """)
+
+        if item is None:
+            act_new = menu.addAction('➕ New Layer…')
+            act_new.triggered.connect(self._prompt_create_layer)
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+            return
+
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        kind, name = data
 
         if kind == 'group':
             target_layers = set(self._group_children.get(name, []))
@@ -442,6 +543,16 @@ class LayerTreeWidget(QWidget):
 
         act_hide = menu.addAction('🚫 Hide')
         act_hide.triggered.connect(lambda: self._set_targets_visible(target_layers, False))
+
+        menu.addSeparator()
+
+        act_color = menu.addAction('🎨 Set Layer Color…')
+        act_color.triggered.connect(lambda: self._prompt_layer_color(name, kind))
+
+        menu.addSeparator()
+
+        act_new = menu.addAction('➕ New Layer…')
+        act_new.triggered.connect(self._prompt_create_layer)
 
         menu.addSeparator()
 
