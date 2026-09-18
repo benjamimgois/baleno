@@ -1326,6 +1326,7 @@ class TopologyTab(QWidget):
         self._monitor = TrafficMonitor(
             devices, self._credentials(),
             communities=self._community_list(),
+            perf_interval=120.0,
             config=self._config,
         )
         self._monitor.updated.connect(self.view.update_traffic)

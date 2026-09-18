@@ -63,11 +63,102 @@ OID_IF_HC_IN_OCTETS = '1.3.6.1.2.1.31.1.1.1.6'
 OID_IF_HC_OUT_OCTETS = '1.3.6.1.2.1.31.1.1.1.10'
 OID_IF_HIGH_SPEED = '1.3.6.1.2.1.31.1.1.1.15'
 
-# Performance (best-effort, vendor-dependent)
-OID_HR_PROCESSOR_LOAD = '1.3.6.1.2.1.25.3.3.1.2'          # HOST-RESOURCES-MIB
-OID_CISCO_CPU_5MIN_REV = '1.3.6.1.4.1.9.9.109.1.1.1.1.8'  # CISCO-PROCESS-MIB
-OID_CISCO_MEM_POOL_USED = '1.3.6.1.4.1.9.9.48.1.1.1.5'    # CISCO-MEMORY-POOL-MIB
+# Performance OIDs (Multivendor)
+# Huawei (VRP)
+OID_HUAWEI_CPU = '1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5'        # hwEntityCpuUsage
+OID_HUAWEI_CPU_DUTY = '1.3.6.1.4.1.2011.6.3.4.1.4'           # hwCpuDevDuty
+OID_HUAWEI_MEM = '1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7'        # hwEntityMemUsage
+OID_HUAWEI_MEM_DUTY = '1.3.6.1.4.1.2011.6.3.5.1.1.2'         # hwMemDevDuty
+
+# HP / HPE (Comware & ProCurve)
+OID_HP_COMWARE_CPU = '1.3.6.1.4.1.25506.2.6.1.1.1.1.6'       # hh3cEntityExtCpuUsage
+OID_HP_COMWARE_MEM = '1.3.6.1.4.1.25506.2.6.1.1.1.1.8'       # hh3cEntityExtMemUsage
+OID_HP_PROCURVE_CPU = '1.3.6.1.4.1.11.2.14.11.5.1.9.6.1.0'   # hpSwitchCpuStat
+OID_HP_PROCURVE_MEM_ALLOC = '1.3.6.1.4.1.11.2.14.11.5.1.1.2.2.1.1.7.1' # hpSwitchMemoryAlloc %
+OID_HP_PROCURVE_MEM_USED = '1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.5.1'  # hpGlobalMemAllocBytes
+OID_HP_PROCURVE_MEM_FREE = '1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6.1'  # hpGlobalMemFreeBytes
+
+# Aruba (AOS-S uses ProCurve; AOS-CX)
+OID_ARUBA_CX_CPU = '1.3.6.1.4.1.47196.4.1.1.3.11.1.1.1.1'
+
+# Cisco (CISCO-PROCESS-MIB & CISCO-MEMORY-POOL-MIB)
+OID_CISCO_CPU_5MIN_REV = '1.3.6.1.4.1.9.9.109.1.1.1.1.8'
+OID_CISCO_CPU_1MIN_REV = '1.3.6.1.4.1.9.9.109.1.1.1.1.7'
+OID_CISCO_CPU_LEGACY = '1.3.6.1.4.1.9.2.1.58.0'              # avgBusy5
+OID_CISCO_MEM_POOL_USED = '1.3.6.1.4.1.9.9.48.1.1.1.5'
 OID_CISCO_MEM_POOL_FREE = '1.3.6.1.4.1.9.9.48.1.1.1.6'
+
+# TP-Link (JetStream / Omada)
+OID_TPLINK_CPU_5MIN = '1.3.6.1.4.1.11863.6.4.1.1.1.1.3'      # tpSysMonitorCpuUtilization (5m)
+OID_TPLINK_CPU_1MIN = '1.3.6.1.4.1.11863.6.4.1.1.1.1.2'
+OID_TPLINK_CPU_GENERIC = '1.3.6.1.4.1.11863.1.1.1'
+OID_TPLINK_MEM = '1.3.6.1.4.1.11863.6.4.1.2.1.1.1'          # tpSysMonitorMemoryUtilization
+
+# Juniper (Junos)
+OID_JUNIPER_CPU = '1.3.6.1.4.1.2636.3.1.13.1.8'              # jnxOperatingCPU
+OID_JUNIPER_MEM = '1.3.6.1.4.1.2636.3.1.13.1.11'             # jnxOperatingBuffer
+
+# MikroTik (RouterOS)
+OID_MIKROTIK_CPU = '1.3.6.1.4.1.14988.1.1.1.3.1.5'           # mtxrProcessorLoad
+
+# Host Resources & Net-SNMP (RFC 2790 / Linux / Generic)
+OID_HR_PROCESSOR_LOAD = '1.3.6.1.2.1.25.3.3.1.2'             # HOST-RESOURCES-MIB
+OID_UCD_CPU_IDLE = '1.3.6.1.4.1.2021.11.11.0'                # ssCpuIdle
+OID_UCD_MEM_TOTAL = '1.3.6.1.4.1.2021.4.5.0'                 # memTotalReal
+OID_UCD_MEM_AVAIL = '1.3.6.1.4.1.2021.4.6.0'                 # memAvailReal
+OID_HR_STORAGE_TYPE = '1.3.6.1.2.1.25.2.3.1.2'               # hrStorageType
+OID_HR_STORAGE_SIZE = '1.3.6.1.2.1.25.2.3.1.5'               # hrStorageSize
+OID_HR_STORAGE_USED = '1.3.6.1.2.1.25.2.3.1.6'               # hrStorageUsed
+
+# Multivendor candidate probe catalogs (in priority order: Huawei, HP, Aruba, Cisco, TP-Link, Juniper, MikroTik, Linux)
+CPU_PROBES = [
+    # (id, vendor_tag, probe_type, oid_or_oids)
+    ('huawei_entity', 'huawei', 'walk_avg', OID_HUAWEI_CPU),
+    ('huawei_duty', 'huawei', 'walk_avg', OID_HUAWEI_CPU_DUTY),
+    ('hp_comware', 'hp', 'walk_avg', OID_HP_COMWARE_CPU),
+    ('hp_procurve', 'hp', 'get_scalar', OID_HP_PROCURVE_CPU),
+    ('aruba_cx', 'aruba', 'walk_avg', OID_ARUBA_CX_CPU),
+    ('cisco_cpm_5m', 'cisco', 'walk_avg', OID_CISCO_CPU_5MIN_REV),
+    ('cisco_cpm_1m', 'cisco', 'walk_avg', OID_CISCO_CPU_1MIN_REV),
+    ('cisco_legacy', 'cisco', 'get_scalar', OID_CISCO_CPU_LEGACY),
+    ('tplink_5m', 'tplink', 'walk_avg', OID_TPLINK_CPU_5MIN),
+    ('tplink_1m', 'tplink', 'walk_avg', OID_TPLINK_CPU_1MIN),
+    ('tplink_gen', 'tplink', 'get_scalar', OID_TPLINK_CPU_GENERIC),
+    ('juniper_jnx', 'juniper', 'walk_avg', OID_JUNIPER_CPU),
+    ('mikrotik_mtxr', 'mikrotik', 'walk_avg', OID_MIKROTIK_CPU),
+    ('linux_hr', 'linux', 'walk_avg', OID_HR_PROCESSOR_LOAD),
+    ('linux_ucd', 'linux', 'get_idle', OID_UCD_CPU_IDLE),
+]
+
+MEM_PROBES = [
+    # (id, vendor_tag, probe_type, oid_or_oids)
+    ('huawei_entity', 'huawei', 'walk_avg', OID_HUAWEI_MEM),
+    ('huawei_duty', 'huawei', 'walk_avg', OID_HUAWEI_MEM_DUTY),
+    ('hp_comware', 'hp', 'walk_avg', OID_HP_COMWARE_MEM),
+    ('hp_procurve_alloc', 'hp', 'get_scalar', OID_HP_PROCURVE_MEM_ALLOC),
+    ('hp_procurve_bytes', 'hp', 'get_used_free', (OID_HP_PROCURVE_MEM_USED, OID_HP_PROCURVE_MEM_FREE)),
+    ('cisco_pool', 'cisco', 'walk_used_free', (OID_CISCO_MEM_POOL_USED, OID_CISCO_MEM_POOL_FREE)),
+    ('tplink_mem', 'tplink', 'walk_avg', OID_TPLINK_MEM),
+    ('juniper_jnx', 'juniper', 'walk_avg', OID_JUNIPER_MEM),
+    ('mikrotik_ram', 'mikrotik', 'walk_hr_ram', None),
+    ('linux_ucd', 'linux', 'get_ucd_mem', (OID_UCD_MEM_TOTAL, OID_UCD_MEM_AVAIL)),
+    ('linux_hr', 'linux', 'walk_hr_ram', None),
+]
+
+
+def _order_probes(probes: list[tuple], vendor: str) -> list[tuple]:
+    if not vendor:
+        return list(probes)
+    v = vendor.lower().replace('-', '').replace(' ', '')
+    matching = []
+    others = []
+    for p in probes:
+        tag = p[1]
+        if tag in v or v in tag:
+            matching.append(p)
+        else:
+            others.append(p)
+    return matching + others
 
 # Future CDP extension point (CISCO-CDP-MIB).
 CDP_MIB = '1.3.6.1.4.1.9.9.23'
@@ -243,9 +334,10 @@ class LldpCollector:
         """
         return await self._read_counters(engine, auth, target)
 
-    async def poll_cpu_mem_async(self, engine, auth, target) -> tuple:
-        """Return ``(cpu_percent, memory_percent)``; None when unavailable."""
-        return await self._read_cpu_mem(engine, auth, target)
+    async def poll_cpu_mem_async(self, engine, auth, target, vendor: str = '',
+                                 cache: Optional[dict] = None) -> tuple:
+        """Return ``(cpu_percent, memory_percent, updated_cache)``."""
+        return await self._read_cpu_mem(engine, auth, target, vendor=vendor, cache=cache)
 
     async def poll_status_async(self, engine, auth, target) -> dict[int, str]:
         """Return ``{ifIndex: 'up'|'down'|'unknown'}`` using a live session.
@@ -376,12 +468,15 @@ class LldpCollector:
         from pysnmp.hlapi.v3arch.asyncio import (
             ContextData, ObjectType, ObjectIdentity, get_cmd,
         )
-        err_ind, err_stat, _, var_binds = await get_cmd(
-            engine, auth, target, ContextData(),
-            ObjectType(ObjectIdentity(oid)))
-        if err_ind or err_stat or not var_binds:
+        try:
+            err_ind, err_stat, _, var_binds = await get_cmd(
+                engine, auth, target, ContextData(),
+                ObjectType(ObjectIdentity(oid)))
+            if err_ind or err_stat or not var_binds:
+                return None
+            return _format_varbind(var_binds[0][1])
+        except Exception:
             return None
-        return _format_varbind(var_binds[0][1])
 
     async def _walk(self, engine, auth, target, oid: str) -> list[tuple[str, str]]:
         from pysnmp.hlapi.v3arch.asyncio import (
@@ -513,37 +608,209 @@ class LldpCollector:
                 continue
         return counters
 
-    async def _read_cpu_mem(self, engine, auth, target) -> tuple:
-        """Return ``(cpu_percent, memory_percent)``; None when unavailable."""
-        cpu = None
-        cpu_rows = await self._walk(engine, auth, target, OID_CISCO_CPU_5MIN_REV)
-        if not cpu_rows:
-            cpu_rows = await self._walk(engine, auth, target, OID_HR_PROCESSOR_LOAD)
-        if cpu_rows:
+    async def _probe_cpu_one(self, engine, auth, target, probe_type: str, oid_or_oids: Any) -> Optional[float]:
+        if probe_type == 'walk_avg':
+            rows = await self._walk(engine, auth, target, oid_or_oids)
+            if not rows:
+                return None
             vals: list[float] = []
-            for _, v in cpu_rows:
+            for _, v in rows:
                 try:
-                    vals.append(float(v))
-                except ValueError:
+                    fv = float(str(v).strip().rstrip('%'))
+                    if 0.0 <= fv <= 100.0:
+                        vals.append(fv)
+                except (ValueError, AttributeError):
                     continue
             if vals:
-                cpu = sum(vals) / len(vals)
+                pos = [x for x in vals if x > 0]
+                return round(sum(pos) / len(pos), 1) if pos else 0.0
+            return None
+        elif probe_type == 'get_scalar':
+            res = await self._get(engine, auth, target, oid_or_oids)
+            if res is not None:
+                try:
+                    fv = float(str(res).strip().rstrip('%'))
+                    if 0.0 <= fv <= 100.0:
+                        return round(fv, 1)
+                except (ValueError, AttributeError):
+                    pass
+            return None
+        elif probe_type == 'get_idle':
+            res = await self._get(engine, auth, target, oid_or_oids)
+            if res is not None:
+                try:
+                    fv = float(str(res).strip().rstrip('%'))
+                    if 0.0 <= fv <= 100.0:
+                        return round(100.0 - fv, 1)
+                except (ValueError, AttributeError):
+                    pass
+            return None
+        return None
 
-        mem = None
-        used_rows = await self._walk(engine, auth, target, OID_CISCO_MEM_POOL_USED)
-        free_rows = await self._walk(engine, auth, target, OID_CISCO_MEM_POOL_FREE)
-        if used_rows and free_rows:
-            try:
-                used = sum(int(v) for _, v in used_rows)
-                free = sum(int(v) for _, v in free_rows)
-                if used + free > 0:
-                    mem = round(used / (used + free) * 100.0, 1)
-            except ValueError:
-                pass
-        return cpu, mem
+    async def _probe_mem_one(self, engine, auth, target, probe_type: str, oid_or_oids: Any) -> Optional[float]:
+        if probe_type == 'walk_avg':
+            rows = await self._walk(engine, auth, target, oid_or_oids)
+            if not rows:
+                return None
+            vals: list[float] = []
+            for _, v in rows:
+                try:
+                    fv = float(str(v).strip().rstrip('%'))
+                    if 0.0 <= fv <= 100.0:
+                        vals.append(fv)
+                except (ValueError, AttributeError):
+                    continue
+            if vals:
+                pos = [x for x in vals if x > 0]
+                return round(sum(pos) / len(pos), 1) if pos else 0.0
+            return None
+        elif probe_type == 'get_scalar':
+            res = await self._get(engine, auth, target, oid_or_oids)
+            if res is not None:
+                try:
+                    fv = float(str(res).strip().rstrip('%'))
+                    if 0.0 <= fv <= 100.0:
+                        return round(fv, 1)
+                except (ValueError, AttributeError):
+                    pass
+            return None
+        elif probe_type == 'get_used_free':
+            used_oid, free_oid = oid_or_oids
+            used_s = await self._get(engine, auth, target, used_oid)
+            free_s = await self._get(engine, auth, target, free_oid)
+            if used_s is not None and free_s is not None:
+                try:
+                    used = float(used_s)
+                    free = float(free_s)
+                    if used + free > 0:
+                        return round(used / (used + free) * 100.0, 1)
+                except (ValueError, AttributeError):
+                    pass
+            return None
+        elif probe_type == 'walk_used_free':
+            used_oid, free_oid = oid_or_oids
+            used_rows = await self._walk(engine, auth, target, used_oid)
+            free_rows = await self._walk(engine, auth, target, free_oid)
+            if used_rows and free_rows:
+                try:
+                    used = sum(float(v) for _, v in used_rows)
+                    free = sum(float(v) for _, v in free_rows)
+                    if used + free > 0:
+                        return round(used / (used + free) * 100.0, 1)
+                except (ValueError, AttributeError):
+                    pass
+            return None
+        elif probe_type == 'get_ucd_mem':
+            total_oid, avail_oid = oid_or_oids
+            tot_s = await self._get(engine, auth, target, total_oid)
+            av_s = await self._get(engine, auth, target, avail_oid)
+            if tot_s is not None and av_s is not None:
+                try:
+                    tot = float(tot_s)
+                    av = float(av_s)
+                    if tot > 0:
+                        return round(max(0.0, (tot - av) / tot * 100.0), 1)
+                except (ValueError, AttributeError):
+                    pass
+            return None
+        elif probe_type == 'walk_hr_ram':
+            types = await self._walk(engine, auth, target, OID_HR_STORAGE_TYPE)
+            sizes = await self._walk(engine, auth, target, OID_HR_STORAGE_SIZE)
+            useds = await self._walk(engine, auth, target, OID_HR_STORAGE_USED)
+
+            size_map: dict[str, float] = {}
+            for o, v in sizes:
+                sfx = _oid_suffix(o, OID_HR_STORAGE_SIZE)
+                if sfx:
+                    try:
+                        size_map[sfx[-1]] = float(v)
+                    except ValueError:
+                        pass
+            used_map: dict[str, float] = {}
+            for o, v in useds:
+                sfx = _oid_suffix(o, OID_HR_STORAGE_USED)
+                if sfx:
+                    try:
+                        used_map[sfx[-1]] = float(v)
+                    except ValueError:
+                        pass
+
+            ram_idx = None
+            for o, v in types:
+                if v.endswith('.2') or '25.2.1.2' in v or v == OID_HR_STORAGE_RAM:
+                    sfx = _oid_suffix(o, OID_HR_STORAGE_TYPE)
+                    if sfx and sfx[-1] in size_map and size_map[sfx[-1]] > 0:
+                        ram_idx = sfx[-1]
+                        break
+            if not ram_idx:
+                if '65536' in size_map and size_map['65536'] > 0:
+                    ram_idx = '65536'
+                elif size_map:
+                    ram_idx = max(size_map.keys(), key=lambda k: size_map[k])
+
+            if ram_idx and ram_idx in size_map and ram_idx in used_map:
+                tot = size_map[ram_idx]
+                usd = used_map[ram_idx]
+                if tot > 0:
+                    return round(min(100.0, max(0.0, usd / tot * 100.0)), 1)
+            return None
+        return None
+
+    async def _read_cpu_mem(self, engine, auth, target, vendor: str = '',
+                            cache: Optional[dict] = None) -> tuple:
+        """Return ``(cpu_percent, memory_percent, updated_cache)``."""
+        cpu: Optional[float] = None
+        mem: Optional[float] = None
+        new_cache = dict(cache) if cache else {}
+        fails = new_cache.get('fails', 0)
+
+        # 1. Try cached probes if available and fails < 2
+        cached_cpu_id = new_cache.get('cpu_id')
+        cached_mem_id = new_cache.get('mem_id')
+        cpu_probe = next((p for p in CPU_PROBES if p[0] == cached_cpu_id), None) if cached_cpu_id else None
+        mem_probe = next((p for p in MEM_PROBES if p[0] == cached_mem_id), None) if cached_mem_id else None
+
+        if cpu_probe is not None:
+            cpu = await self._probe_cpu_one(engine, auth, target, cpu_probe[2], cpu_probe[3])
+        if mem_probe is not None:
+            mem = await self._probe_mem_one(engine, auth, target, mem_probe[2], mem_probe[3])
+
+        if cpu is not None or mem is not None:
+            new_cache['fails'] = 0
+            return cpu, mem, new_cache
+
+        # If cache had entries but both failed, increment fail count
+        if cached_cpu_id or cached_mem_id:
+            fails += 1
+            new_cache['fails'] = fails
+            if fails < 2:
+                return None, None, new_cache
+            # Invalidate cache after 2 consecutive failures
+            new_cache = {'fails': 0}
+
+        # 2. Cascaded discovery: sort by vendor hint then priority order
+        ordered_cpu = _order_probes(CPU_PROBES, vendor)
+        for p_id, tag, p_type, oid in ordered_cpu:
+            cpu = await self._probe_cpu_one(engine, auth, target, p_type, oid)
+            if cpu is not None:
+                new_cache['cpu_id'] = p_id
+                break
+
+        ordered_mem = _order_probes(MEM_PROBES, vendor)
+        for p_id, tag, p_type, oid in ordered_mem:
+            mem = await self._probe_mem_one(engine, auth, target, p_type, oid)
+            if mem is not None:
+                new_cache['mem_id'] = p_id
+                break
+
+        if cpu is not None or mem is not None:
+            new_cache['fails'] = 0
+        return cpu, mem, new_cache
 
     async def _fill_perf(self, engine, auth, target, device: Device) -> None:
-        cpu, mem = await self._read_cpu_mem(engine, auth, target)
+        res = await self._read_cpu_mem(engine, auth, target, vendor=device.vendor)
+        cpu = res[0]
+        mem = res[1]
         if cpu is not None:
             device.cpu_usage = round(cpu, 1)
         if mem is not None:
@@ -703,6 +970,14 @@ class LldpCollector:
             return 'Fortinet', 'FortiOS'
         if 'aruba' in d:
             return 'Aruba', 'ArubaOS'
+        if 'hpe' in d or 'procurve' in d:
+            return 'HP', 'ProCurve'
+        if 'comware' in d or 'h3c' in d:
+            return 'HP', 'Comware'
+        if 'hp ' in d or 'hp switch' in d or 'hewlett' in d:
+            return 'HP', ''
+        if 'tp-link' in d or 'tplink' in d or 'jetstream' in d or 'omada' in d:
+            return 'TP-Link', 'JetStream'
         if 'ubiquiti' in d:
             return 'Ubiquiti', ''
         if 'linux' in d:

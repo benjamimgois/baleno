@@ -556,6 +556,71 @@ class NodeItem(QGraphicsObject):
             painter.setPen(TEXT_DIM)
             painter.drawText(QPointF(x0, rect.top() + 74), model)
 
+        # Mini-bars for CPU & Memory usage
+        y_cpu = rect.top() + 83
+        y_mem = rect.top() + 95
+        max_bar_right = rect.right() - 32
+        bar_x = x0 + 38
+        bar_w = max(10.0, max_bar_right - bar_x)
+        bar_h = 4.0
+
+        def _bar_color(pct: float) -> QColor:
+            if pct < 70.0:
+                return QColor('#3FB950')
+            elif pct < 90.0:
+                return QColor('#D29922')
+            return QColor('#F85149')
+
+        painter.setFont(QFont('Sans', 6, QFont.Weight.Bold))
+
+        # CPU Bar
+        cpu_val = self.device.cpu_usage
+        if cpu_val is not None and cpu_val >= 0:
+            cpu_pct = min(max(float(cpu_val), 0.0), 100.0)
+            cpu_label = f"CPU {cpu_pct:.0f}%"
+            cpu_color = _bar_color(cpu_pct)
+            cpu_fill_w = max(2.0, bar_w * (cpu_pct / 100.0))
+        else:
+            cpu_label = "CPU —"
+            cpu_color = QColor('#484F58')
+            cpu_fill_w = 0.0
+
+        painter.setPen(TEXT_DIM)
+        painter.drawText(QRectF(x0, y_cpu - 3, 36, 11),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         cpu_label)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor('#21262D'))
+        painter.drawRoundedRect(QRectF(bar_x, y_cpu + 1, bar_w, bar_h), 2.0, 2.0)
+        if cpu_fill_w > 0:
+            painter.setBrush(cpu_color)
+            painter.drawRoundedRect(QRectF(bar_x, y_cpu + 1, cpu_fill_w, bar_h), 2.0, 2.0)
+
+        # Memory Bar
+        mem_val = self.device.memory_usage
+        if mem_val is not None and mem_val >= 0:
+            mem_pct = min(max(float(mem_val), 0.0), 100.0)
+            mem_label = f"MEM {mem_pct:.0f}%"
+            mem_color = _bar_color(mem_pct)
+            mem_fill_w = max(2.0, bar_w * (mem_pct / 100.0))
+        else:
+            mem_label = "MEM —"
+            mem_color = QColor('#484F58')
+            mem_fill_w = 0.0
+
+        painter.setPen(TEXT_DIM)
+        painter.drawText(QRectF(x0, y_mem - 3, 36, 11),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         mem_label)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor('#21262D'))
+        painter.drawRoundedRect(QRectF(bar_x, y_mem + 1, bar_w, bar_h), 2.0, 2.0)
+        if mem_fill_w > 0:
+            painter.setBrush(mem_color)
+            painter.drawRoundedRect(QRectF(bar_x, y_mem + 1, mem_fill_w, bar_h), 2.0, 2.0)
+
         # status dot + latency badge (top-right)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(status)
@@ -2364,6 +2429,7 @@ class TopologyView(QGraphicsView):
                     iface.out_rate_bps = out_bps
             if node is not None:
                 node.refresh_tooltip()
+                node.update()
 
         for edge in self._scene.edge_items:
             edge.refresh_state()

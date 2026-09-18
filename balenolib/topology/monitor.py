@@ -45,11 +45,12 @@ class TrafficMonitor(QThread):
 
     def __init__(self, devices: list[Device], credentials: SnmpCredentials,
                  interval: float = 5.0, communities: Optional[list[str]] = None,
-                 status_interval: float = 60.0, perf_interval: float = 60.0,
+                 status_interval: float = 60.0, perf_interval: float = 120.0,
                  max_concurrent: int = MAX_CONCURRENT, timeout: float = 1.0,
                  config=None, parent=None):
         super().__init__(parent)
         self.devices = devices
+        self._device_map: dict[str, Device] = {d.id: d for d in devices}
         self.credentials = credentials
         self.interval = interval
         self.status_interval = status_interval
@@ -62,6 +63,7 @@ class TrafficMonitor(QThread):
         self._prev: dict[str, tuple[float, dict[int, tuple[int, int]]]] = {}
         self._perf: dict[str, dict] = {}
         self._sessions: dict[str, tuple] = {}
+        self._working_oids: dict[str, dict] = {}
         self._last_status_refresh = 0.0
         self._last_perf_refresh = 0.0
 
@@ -76,14 +78,14 @@ class TrafficMonitor(QThread):
         try:
             while not self._stop:
                 start = time.monotonic()
-                await self._poll_counters()
                 now = time.monotonic()
-                if now - self._last_status_refresh >= self.status_interval:
-                    await self._refresh_statuses()
-                    self._last_status_refresh = now
                 if now - self._last_perf_refresh >= self.perf_interval:
                     await self._refresh_perf()
                     self._last_perf_refresh = now
+                if now - self._last_status_refresh >= self.status_interval:
+                    await self._refresh_statuses()
+                    self._last_status_refresh = now
+                await self._poll_counters()
                 remaining = self.interval - (time.monotonic() - start)
                 await self._sleep(max(0.0, remaining))
         finally:
@@ -168,15 +170,25 @@ class TrafficMonitor(QThread):
             return_exceptions=True,
         )
         for device_id, result in zip(ids, results):
-            if isinstance(result, Exception):
+            if isinstance(result, Exception) or not result:
                 continue
-            cpu, mem = result
+            if len(result) == 3:
+                cpu, mem, new_cache = result
+                if new_cache:
+                    self._working_oids[device_id] = new_cache
+            else:
+                cpu, mem = result[0], result[1]
             self._perf[device_id] = {'cpu': cpu, 'memory': mem}
 
     async def _poll_perf_one(self, device_id: str, sem: asyncio.Semaphore) -> tuple:
         collector, engine, auth, target = self._sessions[device_id]
+        dev = self._device_map.get(device_id)
+        vendor = dev.vendor if dev else ''
+        cached = self._working_oids.get(device_id)
         async with sem:
-            return await collector.poll_cpu_mem_async(engine, auth, target)
+            return await collector.poll_cpu_mem_async(
+                engine, auth, target, vendor=vendor, cache=cached
+            )
 
     async def _refresh_statuses(self) -> None:
         sem = asyncio.Semaphore(self.max_concurrent)
