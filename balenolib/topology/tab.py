@@ -559,8 +559,12 @@ class TopologyTab(QWidget):
         if not networks:
             QMessageBox.warning(self, 'Topology', 'Enter at least one network (CIDR or IP).')
             return
-        if self._worker is not None and self._worker.isRunning():
-            return
+        if self._worker is not None:
+            try:
+                if self._worker.isRunning():
+                    return
+            except RuntimeError:
+                self._worker = None
 
         self._remember()
         creds = self._credentials()
@@ -595,6 +599,7 @@ class TopologyTab(QWidget):
         self._live_devices[device.id] = device
 
     def _on_finished(self, graph) -> None:
+        self._worker = None
         try:
             self._stop_monitor()
             if self._graph is None:
@@ -633,6 +638,7 @@ class TopologyTab(QWidget):
                 target.links.append(link)
 
     def _on_failed(self, message: str) -> None:
+        self._worker = None
         self.status_label.setText(f'Error: {message}')
         self.discover_btn.setEnabled(True)
 
@@ -795,9 +801,13 @@ class TopologyTab(QWidget):
                 self.version_combo.setCurrentIndex(idx)
 
     def shutdown(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.stop()
-            self._worker.wait(15000)
+        if self._worker is not None:
+            try:
+                if self._worker.isRunning():
+                    self._worker.stop()
+                    self._worker.wait(15000)
+            except RuntimeError:
+                self._worker = None
         self._stop_monitor()
 
     # ── live performance monitor ─────────────────────────────────────────
