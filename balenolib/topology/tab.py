@@ -315,6 +315,10 @@ class TopologyTab(QWidget):
 
         # Build view first so topbar buttons can bind to it
         self.view = TopologyView()
+        anim_enabled = True
+        if self._config:
+            anim_enabled = bool(self._config.get('topology_animate_links', True))
+        self.view.set_animation_enabled(anim_enabled)
         self.view.set_layout_path(default_map_path())
         self.view._scene.node_double_clicked.connect(self._on_node_double_clicked)
         self.view._scene.group_clicked.connect(self._on_group_clicked)
@@ -501,9 +505,23 @@ class TopologyTab(QWidget):
         self.pan_mode_btn.clicked.connect(lambda: self._set_interaction_mode('pan'))
         layout.addWidget(self.pan_mode_btn)
 
+        layout.addWidget(self._vsep())
+
+        # 7. Animation toggle (marching-ants)
+        self.anim_toggle_btn = QToolButton()
+        self.anim_toggle_btn.setCheckable(True)
+        anim_enabled = True
+        if self._config:
+            anim_enabled = bool(self._config.get('topology_animate_links', True))
+        self.anim_toggle_btn.setChecked(anim_enabled)
+        self._update_anim_toggle_ui(anim_enabled)
+        self.anim_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.anim_toggle_btn.toggled.connect(self._on_anim_toggled)
+        layout.addWidget(self.anim_toggle_btn)
+
         layout.addStretch(1)
 
-        # 7. Fast search
+        # 8. Fast search
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('🔍 Search IP, host or vendor…')
         self.search_edit.setFixedWidth(220)
@@ -775,6 +793,20 @@ class TopologyTab(QWidget):
             self.select_mode_btn.blockSignals(False)
             self.pan_mode_btn.blockSignals(False)
         self.view.set_interaction_mode(mode)
+
+    def _update_anim_toggle_ui(self, enabled: bool) -> None:
+        if enabled:
+            self.anim_toggle_btn.setText('⏸ Animate')
+            self.anim_toggle_btn.setToolTip('Pause link traffic animation (marching-ants)')
+        else:
+            self.anim_toggle_btn.setText('▶ Animate')
+            self.anim_toggle_btn.setToolTip('Resume link traffic animation (marching-ants)')
+
+    def _on_anim_toggled(self, checked: bool) -> None:
+        self._update_anim_toggle_ui(checked)
+        self.view.set_animation_enabled(checked)
+        if self._config:
+            self._config.set('topology_animate_links', checked)
 
     def _on_create_layer_requested(self, name: str, hex_code: str) -> None:
         if self._graph is None:

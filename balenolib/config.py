@@ -60,6 +60,8 @@ class ConfigManager:
             'vuln_community_history': '[]',
             # Theme settings
             'theme': 'light',
+            # Topology settings
+            'topology_animate_links': True,
         }
 
         # Load settings
@@ -91,9 +93,13 @@ class ConfigManager:
         self.settings[key] = value
         self.save()
 
-    def get(self, key: str) -> Any:
-        """Get a setting value"""
-        return self.settings.get(key, self.defaults.get(key))
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a setting value, falling back to registered defaults or custom default"""
+        if key in self.settings:
+            return self.settings[key]
+        if key in self.defaults:
+            return self.defaults[key]
+        return default
 
     def get_ssh_profiles(self) -> list[dict[str, Any]]:
         """Get list of saved SSH connection profiles"""

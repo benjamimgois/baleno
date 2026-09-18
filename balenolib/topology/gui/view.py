@@ -394,6 +394,7 @@ class NodeItem(QGraphicsObject):
             | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setAcceptHoverEvents(True)
+        self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self.setToolTip(self._tooltip())
         self.setZValue(10)
 
@@ -730,6 +731,13 @@ class EdgeItem(QGraphicsPathItem):
         self.setPath(path)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
+        # Fast path for Minimap viewport: static solid line without text or animation overhead
+        if widget is not None and getattr(widget, '_is_minimap_viewport', False):
+            painter.setPen(QPen(speed_color(self.link_speed()), 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.path())
+            return
+
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.isSelected():
             painter.setPen(QPen(QColor(255, 255, 255, 150), self._pen_width() + 4.0))
@@ -738,6 +746,12 @@ class EdgeItem(QGraphicsPathItem):
         painter.setPen(self._pen())
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(self.path())
+
+        # Level of Detail (LOD): skip port and traffic labels when zoomed far out
+        lod = option.levelOfDetailFromTransform(painter.worldTransform()) if option else 1.0
+        if lod < 0.5:
+            return
+
         mid = self._label_pos()
         label = f"{self.link.source_port} ⟷ {self.link.target_port}"
         traffic = self.traffic_label()
@@ -1360,13 +1374,21 @@ class Minimap(QGraphicsView):
         self.setInteractive(False)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.NoViewportUpdate)
+        if self.viewport() is not None:
+            self.viewport()._is_minimap_viewport = True
         self.setStyleSheet('background: #0D1117; border: 1px solid #30363d;')
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._refresh)
-        self._timer.start(100)
 
-    def _refresh(self) -> None:
+        # Update overview rectangle when main view is scrolled/panned
+        main_view.horizontalScrollBar().valueChanged.connect(self._on_scroll)
+        main_view.verticalScrollBar().valueChanged.connect(self._on_scroll)
+
+    def _on_scroll(self, *args) -> None:
+        self.viewport().update()
+
+    def refresh_bounds(self) -> None:
+        """Fit scene bounds into overview and repaint."""
         if self.scene() and self.scene().itemsBoundingRect().isValid():
             self.fitInView(self.scene().itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self.viewport().update()
@@ -1483,9 +1505,32 @@ class TopologyView(QGraphicsView):
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self._middle_pan_active = False
         self._middle_pan_pos = None
+        self._interaction_active = False
+        self._animation_enabled = True
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+
+        # OpenGL hardware acceleration with transparent fallback to raster
+        self._opengl_active = False
+        try:
+            from PyQt6.QtWidgets import QApplication
+            from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            from PyQt6.QtGui import QSurfaceFormat
+            platform_name = QApplication.platformName() if QApplication.instance() else ''
+            if platform_name != 'offscreen':
+                fmt = QSurfaceFormat()
+                fmt.setSamples(4)
+                gl_widget = QOpenGLWidget()
+                gl_widget.setFormat(fmt)
+                self.setViewport(gl_widget)
+                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+                self._opengl_active = True
+            else:
+                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+        except Exception:
+            self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+            self._opengl_active = False
+
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._zoom = 1.0
         self.minimap = Minimap(self)
@@ -1514,17 +1559,39 @@ class TopologyView(QGraphicsView):
         self._scene.edge_context_menu_requested.connect(self._on_edge_context_menu)
         self._dash_phase = 0.0
         self._anim_timer = QTimer(self)
-        self._anim_timer.setInterval(40)
+        self._anim_timer.setInterval(50)
         self._anim_timer.timeout.connect(self._tick_animation)
         self._anim_timer.start()
 
     def _tick_animation(self) -> None:
-        """Advance the marching-ants phase and repaint only active edges."""
+        """Advance the marching-ants phase and repaint only visible active edges."""
+        if not self._animation_enabled or self._interaction_active or not self.isVisible():
+            return
+
         self._dash_phase = (self._dash_phase + 1.0) % DASH_PERIOD
+        viewport = self.viewport()
+        if viewport is None:
+            return
+        visible_rect = self.mapToScene(viewport.rect()).boundingRect().adjusted(-80, -80, 80, 80)
         for edge in self._scene.edge_items:
             if edge.state == 'active' and edge.isVisible():
-                edge._dash_offset = self._dash_phase
-                edge.update()
+                if edge.sceneBoundingRect().intersects(visible_rect):
+                    edge._dash_offset = self._dash_phase
+                    edge.update()
+
+    def set_animation_enabled(self, enabled: bool) -> None:
+        """Enable or disable marching-ants link animations."""
+        self._animation_enabled = enabled
+        if enabled:
+            if not self._anim_timer.isActive():
+                self._anim_timer.start(50)
+        else:
+            if self._anim_timer.isActive():
+                self._anim_timer.stop()
+            for edge in self._scene.edge_items:
+                if edge.state == 'active':
+                    edge._dash_offset = 0.0
+                    edge.update()
 
     def _on_edge_context_menu(self, edge: EdgeItem, pos) -> None:
         """Show the manual state/speed override menu for a link."""
@@ -1684,6 +1751,8 @@ class TopologyView(QGraphicsView):
         return True
 
     def _schedule_save(self, *args) -> None:
+        if hasattr(self, 'minimap'):
+            self.minimap.refresh_bounds()
         if self.layout_path:
             self._save_timer.start()
 
@@ -1692,6 +1761,8 @@ class TopologyView(QGraphicsView):
         self._place_minimap()
         self._place_legend()
         self._place_nav_dock()
+        if hasattr(self, 'minimap'):
+            self.minimap.refresh_bounds()
 
     def _place_legend(self) -> None:
         self._legend.move(10, self.height() - self._legend.height() - 10)
@@ -1712,8 +1783,12 @@ class TopologyView(QGraphicsView):
         self._zoom *= factor
         self._zoom = max(0.1, min(self._zoom, 8.0))
         self.scale(factor, factor)
+        if hasattr(self, 'minimap'):
+            self.minimap.viewport().update()
 
     def mousePressEvent(self, event) -> None:
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
+            self._interaction_active = True
         if event.button() == Qt.MouseButton.MiddleButton:
             self._middle_pan_active = True
             self._middle_pan_pos = event.pos()
@@ -1733,6 +1808,7 @@ class TopologyView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        self._interaction_active = False
         if event.button() == Qt.MouseButton.MiddleButton and self._middle_pan_active:
             self._middle_pan_active = False
             self._middle_pan_pos = None
@@ -1743,6 +1819,11 @@ class TopologyView(QGraphicsView):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._middle_pan_active = False
+        self._interaction_active = False
+        super().leaveEvent(event)
 
     def set_interaction_mode(self, mode: str) -> None:
         """Set active interaction mode: 'select' (rubber band drag) or 'pan' (hand drag)."""
@@ -1807,18 +1888,24 @@ class TopologyView(QGraphicsView):
         if self._zoom * factor <= 8.0:
             self._zoom *= factor
             self.scale(factor, factor)
+            if hasattr(self, 'minimap'):
+                self.minimap.viewport().update()
 
     def zoom_out(self) -> None:
         factor = 1 / 1.2
         if self._zoom * factor >= 0.1:
             self._zoom *= factor
             self.scale(factor, factor)
+            if hasattr(self, 'minimap'):
+                self.minimap.viewport().update()
 
     def fit_in_view(self) -> None:
         rect = self._scene.itemsBoundingRect()
         if rect.isValid():
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
+            if hasattr(self, 'minimap'):
+                self.minimap.refresh_bounds()
 
     def zoom_reset(self) -> None:
         """Reset view zoom to 100% (scale 1.0)."""
@@ -1827,6 +1914,8 @@ class TopologyView(QGraphicsView):
             factor = 1.0 / current_zoom
             self._zoom = 1.0
             self.scale(factor, factor)
+            if hasattr(self, 'minimap'):
+                self.minimap.viewport().update()
 
     def highlight_matches(self, query: str) -> list[str]:
         """Highlight nodes matching query (IP, label, vendor, model, etc.) and return IDs."""
