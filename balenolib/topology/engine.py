@@ -29,12 +29,17 @@ except ImportError:
 
 
 _PORT_ALIASES = {
+    'xgigabitethernet': 'xge',
+    'xge': 'xge',
     'gigabitethernet': 'gi',
     'fastethernet': 'fa',
     'tengigabitethernet': 'te',
+    'twentyfivegigabitethernet': '25ge',
     'twentyfivegige': '25ge',
+    'fortygigabitethernet': 'fo',
     'fortygige': 'fo',
-    'hundredgige': 'hu',
+    'hundredgigabitethernet': '100ge',
+    'hundredgige': '100ge',
     'ethernet': 'eth',
     'port-channel': 'po',
     'bundle-ether': 'be',
@@ -87,6 +92,45 @@ class TopologyEngine:
                 groups[frozenset((d.id, target))].append(link)
 
         for pair, links in groups.items():
+            # Reconcile reciprocal links when one side reports numeric or empty port
+            for link in links:
+                s_norm = normalize_port(link.source_port)
+                t_norm = normalize_port(link.target_port)
+                if s_norm.isdigit() or not link.source_port:
+                    for other in links:
+                        if (other.source_id == link.target_id and other.target_id == link.source_id
+                                and normalize_port(other.source_port) == t_norm
+                                and other.target_port
+                                and not normalize_port(other.target_port).isdigit()):
+                            link.source_port = other.target_port
+                            break
+                if t_norm.isdigit() or not link.target_port:
+                    for other in links:
+                        if (other.source_id == link.target_id and other.target_id == link.source_id
+                                and normalize_port(other.target_port) == normalize_port(link.source_port)
+                                and other.source_port
+                                and not normalize_port(other.source_port).isdigit()):
+                            link.target_port = other.source_port
+                            break
+
+            # If there is only one link in each direction between the pair,
+            # correlate remaining numeric/empty endpoints directly
+            if len(links) == 2:
+                l1, l2 = links[0], links[1]
+                if l1.source_id == l2.target_id and l1.target_id == l2.source_id:
+                    if (normalize_port(l1.source_port).isdigit() or not l1.source_port) and \
+                            l2.target_port and not normalize_port(l2.target_port).isdigit():
+                        l1.source_port = l2.target_port
+                    if (normalize_port(l1.target_port).isdigit() or not l1.target_port) and \
+                            l2.source_port and not normalize_port(l2.source_port).isdigit():
+                        l1.target_port = l2.source_port
+                    if (normalize_port(l2.source_port).isdigit() or not l2.source_port) and \
+                            l1.target_port and not normalize_port(l1.target_port).isdigit():
+                        l2.source_port = l1.target_port
+                    if (normalize_port(l2.target_port).isdigit() or not l2.target_port) and \
+                            l1.source_port and not normalize_port(l1.source_port).isdigit():
+                        l2.target_port = l1.source_port
+
             physical: dict[frozenset, PortLink] = {}
             for link in links:
                 key = frozenset((
@@ -95,6 +139,11 @@ class TopologyEngine:
                 ))
                 if key not in physical:
                     physical[key] = link
+                else:
+                    existing = physical[key]
+                    if (normalize_port(existing.source_port).isdigit() or
+                            normalize_port(existing.target_port).isdigit()):
+                        physical[key] = link
             merged = list(physical.values())
             lag = len(merged) > 1
             for link in merged:

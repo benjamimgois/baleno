@@ -328,7 +328,7 @@ class LldpCollector:
 
             # LLDP neighbors
             device.lldp_neighbors = await self._collect_neighbors(
-                engine, auth, target)
+                engine, auth, target, device)
 
             # CPU / memory (best-effort)
             await self._fill_perf(engine, auth, target, device)
@@ -543,7 +543,8 @@ class LldpCollector:
         if mem is not None:
             device.memory_usage = mem
 
-    async def _collect_neighbors(self, engine, auth, target) -> list[LldpNeighbor]:
+    async def _collect_neighbors(self, engine, auth, target,
+                                  device: Optional[Device] = None) -> list[LldpNeighbor]:
         """Walk the LLDP remote table columns and merge by (localPortNum, remIndex)."""
         columns = {
             'remote_chassis_id': OID_REM_CHASSIS_ID,
@@ -583,6 +584,56 @@ class LldpCollector:
             except ValueError:
                 continue
 
+        # Local port desc (lldpLocPortDesc) fallback
+        local_port_descs: dict[int, str] = {}
+        for full_oid, val in await self._walk(engine, auth, target, OID_LOC_PORT_DESC):
+            suffix = _oid_suffix(full_oid, OID_LOC_PORT_DESC)
+            if not suffix:
+                continue
+            try:
+                local_port_descs[int(suffix[-1])] = val
+            except ValueError:
+                continue
+
+        # Extract sorted physical interfaces from device if available
+        phys_interfaces: list[Interface] = []
+        if device is not None and device.interfaces:
+            for idx in sorted(device.interfaces.keys()):
+                iface = device.interfaces[idx]
+                name = iface.name or iface.descr or ''
+                lower_name = name.lower()
+                if any(v in lower_name for v in ('vlan', 'loopback', 'inloop', 'null', 'console', 'meth', 'eth-trunk', 'port-channel', 'bundle')):
+                    continue
+                phys_interfaces.append(iface)
+
+        def _resolve_local_port(port_num: int) -> str:
+            # 1. Non-numeric lldpLocPortId
+            loc_id = local_port_names.get(port_num)
+            if loc_id and not loc_id.isdigit():
+                return loc_id
+
+            # 2. Check 1-based physical chassis port ordinal (e.g. port 35 in a 36-port switch)
+            if 1 <= port_num <= len(phys_interfaces):
+                p_iface = phys_interfaces[port_num - 1]
+                if p_iface.name:
+                    return p_iface.name
+
+            # 3. Check lldpLocPortDesc
+            desc = local_port_descs.get(port_num)
+            if desc and not desc.isdigit():
+                return desc
+
+            # 4. Check if port_num matches an ifIndex in device.interfaces
+            if device is not None and port_num in device.interfaces:
+                iface = device.interfaces[port_num]
+                if iface.name and not iface.name.isdigit():
+                    return iface.name
+                if iface.descr and not iface.descr.isdigit():
+                    return iface.descr
+
+            # 5. Return loc_id if present or string representation
+            return loc_id or str(port_num)
+
         # Management addresses (IPv4 only, subtype == 1).  The raw octets are
         # decoded as a network address; formatting them as a generic OctetString
         # would hex-encode the IP and break correlation + level assignment.
@@ -605,9 +656,10 @@ class LldpCollector:
                 row.get('remote_chassis_id', ''), row.get('remote_chassis_subtype', ''))
             port_id = self._decode_id(
                 row.get('remote_port_id', ''), row.get('remote_port_subtype', ''))
+            resolved_port_name = _resolve_local_port(local_port)
             neighbors.append(LldpNeighbor(
                 local_port_num=local_port,
-                local_port_name=local_port_names.get(local_port, str(local_port)),
+                local_port_name=resolved_port_name,
                 remote_index=rem_index,
                 remote_chassis_id=chassis_id,
                 remote_chassis_subtype=row.get('remote_chassis_subtype', ''),
