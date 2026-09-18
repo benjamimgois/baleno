@@ -11,17 +11,19 @@ import math
 import os
 import re
 import sys
+import time
 from typing import Optional
 
 from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor, QFont, QFontMetricsF, QIcon, QImage, QPainter, QPainterPath, QPainterPathStroker,
-    QPen, QPixmap, QPolygonF,
+    QPen, QPixmap, QPolygonF, QKeySequence, QShortcut,
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
     QGraphicsView, QLabel, QMenu, QDialog, QFrame, QMessageBox, QToolButton, QVBoxLayout,
+    QWidget,
 )
 
 from balenolib.topology.models import (
@@ -688,10 +690,13 @@ class EdgeItem(QGraphicsPathItem):
     def _pen(self) -> QPen:
         w = self._pen_width()
         if self.state == 'down':
-            return QPen(DOWN_COLOR, max(1.5, w))
+            pen = QPen(DOWN_COLOR, max(1.5, w))
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            return pen
         pen = QPen(speed_color(self.link_speed()), w)
         pen.setDashPattern(DASH_PATTERN)
         pen.setDashOffset(self._dash_offset)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         return pen
 
     def traffic_label(self) -> str:
@@ -1491,6 +1496,88 @@ class NavigationOverlay(QFrame):
         self.btn_link.setChecked(on)
         self.btn_link.blockSignals(False)
 
+class FpsOverlay(QLabel):
+    """Real-time FPS counter overlay positioned in top-right of canvas."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self._frame_times: list[float] = []
+        self._timer = QTimer(self)
+        self._timer.setInterval(400)
+        self._timer.timeout.connect(self._update_display)
+        self.hide()
+
+    def record_frame(self) -> None:
+        if not self.isHidden():
+            self._frame_times.append(time.monotonic())
+
+    def toggle(self) -> bool:
+        if not self.isHidden():
+            self._timer.stop()
+            self._frame_times.clear()
+            self.hide()
+            return False
+        else:
+            self._frame_times.clear()
+            self._update_display()
+            self.show()
+            self.raise_()
+            self._timer.start()
+            if self.parent() and hasattr(self.parent(), '_place_fps_overlay'):
+                self.parent()._place_fps_overlay()
+            return True
+
+    def _update_display(self) -> None:
+        now = time.monotonic()
+        cutoff = now - 1.0
+        self._frame_times = [t for t in self._frame_times if t >= cutoff]
+        count = len(self._frame_times)
+        is_gl = getattr(self.parent(), '_opengl_active', False)
+        mode = 'OpenGL' if is_gl else 'Raster'
+        mode_color = '#58A6FF' if is_gl else '#3FB950'
+        fps_color = '#3FB950' if count >= 30 else ('#E67E22' if count >= 15 else '#8B949E')
+        self.setText(
+            f'<span style="background-color:#0D1117EE; color:#C9D1D9; '
+            f'padding:4px 8px; border:1px solid #30363D; border-radius:4px; font-family:monospace; font-size:11px;">'
+            f'<span style="color:{fps_color};">●</span> {count} FPS &nbsp;'
+            f'<span style="color:#8B949E;">•</span>&nbsp; '
+            f'<span style="color:{mode_color};">{mode}</span></span>'
+        )
+        self.adjustSize()
+        if self.parent() and hasattr(self.parent(), '_place_fps_overlay'):
+            self.parent()._place_fps_overlay()
+
+
+class ToastOverlay(QLabel):
+    """Floating non-intrusive toast notification centered at top of canvas."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(1800)
+        self._timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_message(self, message: str, color: str = '#58A6FF') -> None:
+        self._timer.stop()
+        self.setText(
+            f'<span style="background-color:#161B22F2; color:#F0F6FC; '
+            f'padding:6px 14px; border:1px solid #30363D; border-radius:6px; '
+            f'font-size:12px; font-weight:500;">'
+            f'<span style="color:{color};">●</span> &nbsp;{message}</span>'
+        )
+        self.adjustSize()
+        if self.parent() and hasattr(self.parent(), '_place_toast'):
+            self.parent()._place_toast()
+        self.show()
+        self.raise_()
+        self._timer.start()
+
 
 class TopologyView(QGraphicsView):
     """Main topology canvas: wheel-zoom, pan, minimap overlay."""
@@ -1510,26 +1597,9 @@ class TopologyView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
 
-        # OpenGL hardware acceleration with transparent fallback to raster
+        # Viewport configuration: Native QWidget raster by default for high-quality subpixel antialiasing
         self._opengl_active = False
-        try:
-            from PyQt6.QtWidgets import QApplication
-            from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-            from PyQt6.QtGui import QSurfaceFormat
-            platform_name = QApplication.platformName() if QApplication.instance() else ''
-            if platform_name != 'offscreen':
-                fmt = QSurfaceFormat()
-                fmt.setSamples(4)
-                gl_widget = QOpenGLWidget()
-                gl_widget.setFormat(fmt)
-                self.setViewport(gl_widget)
-                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-                self._opengl_active = True
-            else:
-                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
-        except Exception:
-            self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
-            self._opengl_active = False
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._zoom = 1.0
@@ -1549,6 +1619,8 @@ class TopologyView(QGraphicsView):
             '<span style="color:#8B949E;">●</span> ? &nbsp;&nbsp;'
             '<span style="color:#F85149;">━</span> down</span>')
         self._legend.adjustSize()
+        self._fps_overlay = FpsOverlay(self)
+        self._toast = ToastOverlay(self)
         self.layout_path = ''
         self.setAcceptDrops(True)
         self._save_timer = QTimer(self)
@@ -1592,6 +1664,60 @@ class TopologyView(QGraphicsView):
                 if edge.state == 'active':
                     edge._dash_offset = 0.0
                     edge.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if hasattr(self, '_fps_overlay') and not self._fps_overlay.isHidden():
+            self._fps_overlay.record_frame()
+
+    def toggle_opengl(self) -> None:
+        """Toggle between native QWidget (raster) and QOpenGLWidget (hardware acceleration)."""
+        if not self._opengl_active:
+            try:
+                from PyQt6.QtWidgets import QApplication
+                from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+                from PyQt6.QtGui import QSurfaceFormat
+                platform_name = QApplication.platformName() if QApplication.instance() else ''
+                if platform_name == 'offscreen':
+                    self.show_toast('OpenGL não disponível em modo offscreen', '#E67E22')
+                    return
+                fmt = QSurfaceFormat()
+                fmt.setSamples(4)
+                gl_widget = QOpenGLWidget()
+                gl_widget.setFormat(fmt)
+                self.setViewport(gl_widget)
+                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+                self._opengl_active = True
+                self.setRenderHint(QPainter.RenderHint.Antialiasing)
+                self._raise_overlays()
+                self.show_toast('Modo de Renderização: OpenGL (GPU)', '#58A6FF')
+            except Exception as exc:
+                self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+                self._opengl_active = False
+                self.show_toast(f'Falha ao iniciar OpenGL: {exc}', '#F85149')
+        else:
+            widget = QWidget()
+            self.setViewport(widget)
+            self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+            self._opengl_active = False
+            self.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._raise_overlays()
+            self.show_toast('Modo de Renderização: Raster Nativo (Anti-aliased)', '#3FB950')
+        if hasattr(self, '_fps_overlay') and self._fps_overlay.isVisible():
+            self._fps_overlay._update_display()
+
+    def toggle_fps_overlay(self) -> None:
+        """Toggle real-time FPS overlay visibility."""
+        active = self._fps_overlay.toggle()
+        if active:
+            self.show_toast('Contador de FPS: Ativado', '#3FB950')
+        else:
+            self.show_toast('Contador de FPS: Desativado', '#8B949E')
+
+    def show_toast(self, message: str, color: str = '#58A6FF') -> None:
+        """Display an on-screen floating toast notification."""
+        if hasattr(self, '_toast'):
+            self._toast.show_message(message, color)
 
     def _on_edge_context_menu(self, edge: EdgeItem, pos) -> None:
         """Show the manual state/speed override menu for a link."""
@@ -1758,9 +1884,7 @@ class TopologyView(QGraphicsView):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._place_minimap()
-        self._place_legend()
-        self._place_nav_dock()
+        self._raise_overlays()
         if hasattr(self, 'minimap'):
             self.minimap.refresh_bounds()
 
@@ -1777,6 +1901,25 @@ class TopologyView(QGraphicsView):
         if hasattr(self, 'nav_dock'):
             self.nav_dock.move(14, 14)
             self.nav_dock.raise_()
+
+    def _place_fps_overlay(self) -> None:
+        if hasattr(self, '_fps_overlay') and self._fps_overlay.isVisible():
+            self._fps_overlay.move(self.width() - self._fps_overlay.width() - 14, 14)
+            self._fps_overlay.raise_()
+
+    def _place_toast(self) -> None:
+        if hasattr(self, '_toast') and self._toast.isVisible():
+            x = max(10, (self.width() - self._toast.width()) // 2)
+            self._toast.move(x, 16)
+            self._toast.raise_()
+
+    def _raise_overlays(self) -> None:
+        """Raise and position all floating overlays above viewport."""
+        self._place_minimap()
+        self._place_legend()
+        self._place_nav_dock()
+        self._place_fps_overlay()
+        self._place_toast()
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

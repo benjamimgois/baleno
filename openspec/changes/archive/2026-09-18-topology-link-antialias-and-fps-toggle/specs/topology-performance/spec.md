@@ -1,9 +1,6 @@
-# topology-performance Specification
+# Spec Delta
 
-## Purpose
-Define mecanismos de otimização de performance e renderização acelerada por hardware para mapas de topologia com alta densidade de dispositivos e conexões.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Viewport acelerado por hardware via OpenGL
 O sistema SHALL utilizar por padrão raster de software nativo com suporte a subpixel anti-aliasing na visualização principal da topologia e permitir alternância sob demanda para aceleração por hardware (OpenGL) via tecla de atalho.
@@ -20,23 +17,7 @@ O sistema SHALL utilizar por padrão raster de software nativo com suporte a sub
 - **WHEN** o usuário pressiona a tecla F11 com a visualização de topologia ativa
 - **THEN** o sistema alterna o viewport entre o raster nativo e aceleração OpenGL em tempo de execução sem reiniciar a aplicação
 
-### Requirement: Cache de renderização nos nós de dispositivo
-O sistema SHALL utilizar cache em coordenadas de dispositivo (DeviceCoordinateCache) nos nós da topologia para evitar recálculos vetoriais em repinturas.
-
-#### Scenario: Pan ou movimentação do mapa
-- **WHEN** o usuário desloca o mapa pelo viewport
-- **THEN** os nós existentes utilizam a imagem em cache na memória sem reexecutar desenho de fontes, SVG ou ícones
-
-#### Scenario: Atualização de atributos do dispositivo
-- **WHEN** um dispositivo tem status, seleção ou identificação alterada
-- **THEN** o cache do nó correspondente é invalidado e redesenhado com os novos dados
-
-### Requirement: Simplificação por nível de detalhe (LOD) em zoom distante
-O sistema SHALL ocultar etiquetas de texto de portas e tráfego nas conexões quando o nível de zoom estiver excessivamente reduzido.
-
-#### Scenario: Zoom afastado além do limiar
-- **WHEN** o fator de escala da cena estiver abaixo de 0.5 (nível de detalhe reduzido)
-- **THEN** as etiquetas de texto das conexões são suprimidas na renderização para poupar cálculos de fonte
+## ADDED Requirements
 
 ### Requirement: Medição e exibição de taxa de quadros (FPS)
 O sistema SHALL fornecer um medidor de taxa de quadros (FPS) em tempo real posicionado no canto superior direito do canvas de topologia, ativado e desativado sob demanda via tecla de atalho.

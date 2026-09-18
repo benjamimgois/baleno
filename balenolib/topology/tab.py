@@ -408,6 +408,14 @@ class TopologyTab(QWidget):
         self._panel_shortcut = QShortcut(QKeySequence('Ctrl+B'), self)
         self._panel_shortcut.activated.connect(self.sidebar_toggle_btn.toggle)
 
+        self._f11_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F11), self)
+        self._f11_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._f11_shortcut.activated.connect(self.view.toggle_opengl)
+
+        self._f12_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F12), self)
+        self._f12_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._f12_shortcut.activated.connect(self.view.toggle_fps_overlay)
+
         # Load saved map and restore state
         if self.view.load_saved_map():
             self._graph = self.view._scene.graph

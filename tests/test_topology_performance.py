@@ -312,6 +312,62 @@ class TestTopologyPerformance(unittest.TestCase):
             QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate,
         ])
 
+    def test_default_viewport_raster_and_pen_round_cap(self):
+        """Default viewport must be native raster QWidget, and EdgeItem pen must use RoundCap."""
+        view = TopologyView()
+        self.assertFalse(view._opengl_active)
+        self.assertEqual(type(view.viewport()).__name__, 'QWidget')
+        self.assertEqual(view.viewportUpdateMode(), QGraphicsView.ViewportUpdateMode.BoundingRectViewportUpdate)
+
+        link = PortLink(source_id='dev1', target_id='dev2', source_port='Gi0/1', target_port='Gi0/2')
+        edge = EdgeItem(link, self.node1, self.node2)
+        # Active state RoundCap
+        pen_active = edge._pen()
+        self.assertEqual(pen_active.capStyle(), Qt.PenCapStyle.RoundCap)
+        # Down state RoundCap
+        edge.state = 'down'
+        pen_down = edge._pen()
+        self.assertEqual(pen_down.capStyle(), Qt.PenCapStyle.RoundCap)
+
+    def test_fps_overlay_and_toast_notifications(self):
+        """TopologyTab F11 and F12 shortcuts must toggle OpenGL mode and FPS overlay with Toast feedback."""
+        mock_config = MagicMock()
+        mock_config.get.side_effect = lambda k, d='': True if k == 'topology_animate_links' else ('["public"]' if k == 'vuln_community_history' else d)
+        mock_config.get_vuln_community_history.return_value = ['public']
+
+        tab = TopologyTab(config_manager=mock_config)
+        tab.show()
+        view = tab.view
+
+        # Overlays exist and start hidden
+        self.assertTrue(hasattr(view, '_fps_overlay'))
+        self.assertTrue(hasattr(view, '_toast'))
+        self.assertFalse(view._fps_overlay.isVisible())
+
+        # Test F12 toggle on
+        tab._f12_shortcut.activated.emit()
+        self.assertTrue(view._fps_overlay.isVisible())
+        self.assertIn('Contador de FPS: Ativado', view._toast.text())
+
+        # Test paintEvent records frame
+        view._fps_overlay.record_frame()
+        self.assertGreater(len(view._fps_overlay._frame_times), 0)
+
+        # Test F12 toggle off
+        tab._f12_shortcut.activated.emit()
+        self.assertFalse(view._fps_overlay.isVisible())
+        self.assertIn('Contador de FPS: Desativado', view._toast.text())
+
+        # Test F11 toggle OpenGL
+        tab._f11_shortcut.activated.emit()
+        # In offscreen platform (headless test environment), offscreen toast is displayed or toggled
+        self.assertTrue(view._toast.isVisible())
+
+        # Test show_toast directly
+        view.show_toast('Teste Toast', '#58A6FF')
+        self.assertTrue(view._toast.isVisible())
+        self.assertIn('Teste Toast', view._toast.text())
+
 
 if __name__ == '__main__':
     unittest.main()
