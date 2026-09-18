@@ -66,6 +66,35 @@ O sistema SHALL exibir um painel listando as camadas presentes no mapa e permiti
 - **WHEN** uma aresta liga dois dispositivos
 - **THEN** a aresta é exibida somente quando ambos os extremos estão visíveis
 
+### Requirement: Árvore hierárquica de camadas e agrupamento
+O sistema SHALL agrupar camadas com o mesmo prefixo em uma árvore expansível/colapsável no painel lateral, exibindo o número de nós por camada e permitindo controle de visibilidade em cascata.
+
+#### Scenario: Alternar visibilidade do grupo
+- **WHEN** o usuário clica no controle de visibilidade do grupo pai "Rede-A"
+- **THEN** todas as subcamadas do grupo ("Rede-A", "Rede-A-2", ...) assumem o mesmo estado de visibilidade
+
+#### Scenario: Colapsar grupo de camadas
+- **WHEN** o usuário colapsa um grupo de camadas
+- **THEN** as subcamadas são recolhidas mantendo apenas a linha de cabeçalho do grupo visível
+
+### Requirement: Ações contextuais de camada (Solo e Enquadramento)
+O sistema SHALL fornecer um menu de contexto (botão direito) sobre os itens da árvore de camadas com ações avançadas de visualização.
+
+#### Scenario: Modo Solo
+- **WHEN** o usuário aciona a ação "Solo" em uma camada ou grupo
+- **THEN** a camada selecionada torna-se a única visível e todas as demais camadas são ocultadas
+
+#### Scenario: Enquadrar no mapa (Fit Layer)
+- **WHEN** o usuário aciona a ação "Enquadrar no mapa" em uma camada
+- **THEN** a visão do canvas ajusta o zoom e o centro para enquadrar os dispositivos daquela camada
+
+### Requirement: Barra superior compacta com popover SNMP
+O sistema SHALL consolidar os controles de descoberta em uma barra superior compacta de linha única, deslocando configurações avançadas de SNMP para um menu suspenso (popover).
+
+#### Scenario: Abertura do menu SNMP
+- **WHEN** o usuário clica no botão de configurações SNMP na barra superior
+- **THEN** um menu suspenso é aberto contendo a seleção de versão (v1, v2c, v3), comunidade com histórico e credenciais v3 sem ocupar espaço horizontal permanente na barra
+
 ### Requirement: Posicionamento espacial não sobreposto
 O sistema SHALL posicionar os dispositivos de uma nova descoberta em uma região espacial à direita da área já ocupada, sem sobrepor os dispositivos existentes.
 

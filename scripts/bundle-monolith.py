@@ -41,6 +41,7 @@ MODULE_ORDER = [
     'topology/worker.py',
     'topology/gui/detail.py',
     'topology/gui/view.py',
+    'topology/gui/layers.py',
     'topology/actions.py',
     'topology/tab.py',
     'main.py',

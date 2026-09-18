@@ -43,11 +43,24 @@ Cada descoberta ocupa uma "região". Ao terminar, calcula o bounding box atual e
 ### D5 — Ciclo de vida do monitor (fix do crash)
 Antes de mesclar, `_stop_monitor()` para o monitor antigo **e garante a finalização** (espera sem descartar thread em execução). O novo monitor cobre todos os dispositivos do grafo mesclado.
 
-### D6 — Painel de camadas
-Uma lista de camadas (com checkbox/olho), alimentada pelas camadas presentes no grafo. A visibilidade filtra nós/arestas: um dispositivo é visível se **alguma** de suas camadas estiver visível; uma aresta, se ambos os extremos forem visíveis.
+### D6 — Painel de camadas estilo GIMP e ações contextuais
+O controle de camadas adota o padrão de editor de imagens (GIMP):
+- **Árvore hierárquica**: Descobertas e suas subcamadas (`backbone`, `backbone-2`, `backbone-3`) são agrupadas sob uma pasta pai raiz correspondente ao prefixo da rede.
+- **Visibilidade por ícone de olho (`👁`)**: Permite ligar/desligar a visualização em cascata para todo o grupo ou granularmente por subcamada (profundidade LLDP).
+- **Contador de nós**: Cada camada e grupo exibe o número de dispositivos pertencentes.
+- **Menu de contexto (botão direito)**: Ações avançadas como *Solo* (isolar a camada ocultando todas as demais), *Enquadrar no mapa (Fit Layer)* (pan e zoom para os limites da camada), *Exibir/Ocultar grupo*, e *Remover camada*.
 
 ### D7 — Persistência
 `Device.to_dict`/`from_dict` passam a serializar `layers`. O formato v3 do mapa ganha o campo por dispositivo; leitura antiga (sem o campo) é tolerada (camada vazia → visível por padrão).
+
+### D8 — Reestruturação da UI: Layout "Studio / CAD" (Opção A)
+A barra Ribbon (que fragmentava os controles em 4 abas e consumia ~110px de altura) é substituída por um layout Studio/CAD limpo e moderno:
+- **Barra superior compacta de linha única (~38px)**: Contém os campos de descoberta (`Networks`, `Layer`), botão `Discover`, barra de progresso, status e seletores de ação rápida (`Layout`, `Save Map`, `Export PNG`).
+- **Popover de configurações SNMP**: As opções de versão SNMP (v1/v2c/v3), comunidade com histórico e credenciais v3 são movidas para um popover acionado por `[ ⚙ SNMP: v2c ▾ ]`, despoluindo a barra principal.
+- **Painel lateral retrátil (Sidebar)**: Acoplado à direita do canvas (com toggle `[<]` / `[>]`), divido em duas seções:
+  1. *Camadas (Layers)*: Árvore hierárquica estilo GIMP.
+  2. *Paleta de Objetos*: Ícones arrastáveis (roteador, switch, etc.) imediatamente acessíveis sem precisar trocar de aba.
+- **Controles flutuantes sobre o Canvas**: Botões de `Zoom In`, `Zoom Out`, `Fit In View` e a ferramenta de conexão manual (`Link Tool`) passam a flutuar no canvas como um mini-dock elegante.
 
 ## Risks / Trade-offs
 

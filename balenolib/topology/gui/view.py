@@ -21,7 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
-    QGraphicsView, QLabel, QMenu, QDialog,
+    QGraphicsView, QLabel, QMenu, QDialog, QFrame, QToolButton, QVBoxLayout,
 )
 
 from balenolib.topology.models import (
@@ -1271,6 +1271,89 @@ class Minimap(QGraphicsView):
                       float(br.x() - tl.x()), float(br.y() - tl.y()))
 
 
+class NavDockButton(QToolButton):
+    """Small square icon button for the floating canvas dock."""
+
+    def __init__(self, mode: str, tooltip: str, parent=None):
+        super().__init__(parent)
+        self.mode = mode
+        self.setFixedSize(30, 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(tooltip)
+        if mode == 'link':
+            self.setCheckable(True)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.isChecked():
+            bg = QColor(65, 105, 225)
+        elif self.underMouse():
+            bg = QColor(48, 54, 61)
+        else:
+            bg = Qt.GlobalColor.transparent
+        painter.fillRect(self.rect(), bg)
+
+        rect = QRectF(self.rect()).adjusted(4, 4, -4, -4)
+        if self.mode == 'zoom_in':
+            painter.setPen(QPen(QColor(201, 209, 217), 1.6))
+            cx, cy = rect.center().x(), rect.center().y()
+            painter.drawLine(QPointF(cx - 5, cy), QPointF(cx + 5, cy))
+            painter.drawLine(QPointF(cx, cy - 5), QPointF(cx, cy + 5))
+        elif self.mode == 'zoom_out':
+            painter.setPen(QPen(QColor(201, 209, 217), 1.6))
+            cx, cy = rect.center().x(), rect.center().y()
+            painter.drawLine(QPointF(cx - 5, cy), QPointF(cx + 5, cy))
+        elif self.mode == 'fit':
+            draw_fit_icon(painter, rect)
+        elif self.mode == 'link':
+            draw_link_icon(painter, rect)
+        painter.end()
+
+
+class NavigationOverlay(QFrame):
+    """Floating canvas navigation dock (+, -, Fit, Link)."""
+
+    def __init__(self, view: TopologyView):
+        super().__init__(view)
+        self._view = view
+        self.setObjectName('navOverlay')
+        self.setStyleSheet("""
+            QFrame#navOverlay {
+                background-color: rgba(22, 27, 34, 0.88);
+                border: 1px solid #30363D;
+                border-radius: 6px;
+            }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+
+        self.btn_in = NavDockButton('zoom_in', 'Zoom In (+)', self)
+        self.btn_in.clicked.connect(self._view.zoom_in)
+        layout.addWidget(self.btn_in)
+
+        self.btn_out = NavDockButton('zoom_out', 'Zoom Out (-)', self)
+        self.btn_out.clicked.connect(self._view.zoom_out)
+        layout.addWidget(self.btn_out)
+
+        self.btn_fit = NavDockButton('fit', 'Fit Map in View', self)
+        self.btn_fit.clicked.connect(self._view.fit_in_view)
+        layout.addWidget(self.btn_fit)
+
+        self.btn_link = NavDockButton('link', 'Create Link (Click two devices)', self)
+        self.btn_link.toggled.connect(self._view.set_link_mode)
+        layout.addWidget(self.btn_link)
+
+        self._view._scene.link_mode_changed.connect(self._on_link_mode_changed)
+        self.adjustSize()
+
+    def _on_link_mode_changed(self, on: bool) -> None:
+        self.btn_link.blockSignals(True)
+        self.btn_link.setChecked(on)
+        self.btn_link.blockSignals(False)
+
+
 class TopologyView(QGraphicsView):
     """Main topology canvas: wheel-zoom, pan, minimap overlay."""
 
@@ -1286,6 +1369,7 @@ class TopologyView(QGraphicsView):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._zoom = 1.0
         self.minimap = Minimap(self)
+        self.nav_dock = NavigationOverlay(self)
         self._legend = QLabel(self)
         self._legend.setTextFormat(Qt.TextFormat.RichText)
         self._legend.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -1459,6 +1543,7 @@ class TopologyView(QGraphicsView):
         super().resizeEvent(event)
         self._place_minimap()
         self._place_legend()
+        self._place_nav_dock()
 
     def _place_legend(self) -> None:
         self._legend.move(10, self.height() - self._legend.height() - 10)
@@ -1468,6 +1553,11 @@ class TopologyView(QGraphicsView):
         self.minimap.move(self.width() - self.minimap.width() - 10,
                           self.height() - self.minimap.height() - 10)
         self.minimap.raise_()
+
+    def _place_nav_dock(self) -> None:
+        if hasattr(self, 'nav_dock'):
+            self.nav_dock.move(14, 14)
+            self.nav_dock.raise_()
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
@@ -1519,10 +1609,38 @@ class TopologyView(QGraphicsView):
         for n in new_nodes:
             n.setPos(n.pos().x() + dx, n.pos().y())
 
+    def zoom_in(self) -> None:
+        factor = 1.2
+        if self._zoom * factor <= 8.0:
+            self._zoom *= factor
+            self.scale(factor, factor)
+
+    def zoom_out(self) -> None:
+        factor = 1 / 1.2
+        if self._zoom * factor >= 0.1:
+            self._zoom *= factor
+            self.scale(factor, factor)
+
     def fit_in_view(self) -> None:
         rect = self._scene.itemsBoundingRect()
         if rect.isValid():
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self._zoom = self.transform().m11()
+
+    def fit_layer(self, layer_names: set[str] | str) -> None:
+        """Fit view to nodes belonging to the specified layer(s)."""
+        if isinstance(layer_names, str):
+            layer_names = {layer_names}
+        rect = QRectF()
+        first = True
+        for item in self._scene.node_items.values():
+            if item.device.layers & layer_names:
+                r = item.sceneBoundingRect()
+                rect = r if first else rect.united(r)
+                first = False
+        if not first and rect.isValid():
+            self.fitInView(rect.adjusted(-100, -100, 100, 100),
+                           Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
 
     def set_visible_levels(self, levels: Optional[set]) -> None:
