@@ -229,6 +229,248 @@ class TestDiscoveryModesAndLayers(unittest.TestCase):
         self.assertEqual(dev2.layers, {'All-Net'})
         self.assertEqual(dev3.layers, {'All-Net'})
 
+    def test_device_details_model_persistence_and_dialog_styling(self):
+        """Test device interface/sys_descr persistence and dialog dark theme styling."""
+        import sys
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication(sys.argv)
+        from balenolib.topology.models import Interface, LldpNeighbor
+        from balenolib.topology.gui.detail import (
+            DeviceDetailDialog, GroupDevicesDialog, LinkCreationDialog, LinkEditDialog,
+            _DARK_DIALOG_STYLE,
+        )
+
+        dev = Device(
+            id='sw1', ip='10.0.0.1', hostname='Core-SW', role=DeviceRole.SWITCH,
+            sys_descr='MikroTik RouterOS 7.12', uptime='42 days', latency_ms=1.5,
+        )
+        dev.interfaces[1] = Interface(
+            index=1, name='ether1', descr='GigabitEthernet1', alias='Uplink to ISP', oper_status='up'
+        )
+        dev.interfaces[2] = Interface(
+            index=2, name='ether2', descr='GigabitEthernet2', alias='', oper_status='down'
+        )
+        dev.lldp_neighbors.append(LldpNeighbor(
+            local_port_num=1, local_port_name='ether1', remote_sys_name='Edge-Rtr',
+            remote_port_id='ether5',
+        ))
+
+        # Test round-trip persistence
+        d = dev.to_dict()
+        self.assertEqual(d['sys_descr'], 'MikroTik RouterOS 7.12')
+        self.assertEqual(d['uptime'], '42 days')
+        self.assertEqual(d['latency_ms'], 1.5)
+        self.assertIn('1', d['interfaces'])
+        self.assertEqual(d['interfaces']['1']['descr'], 'GigabitEthernet1')
+        self.assertEqual(d['interfaces']['1']['alias'], 'Uplink to ISP')
+        self.assertEqual(len(d['lldp_neighbors']), 1)
+
+        restored = Device.from_dict(d)
+        self.assertEqual(restored.sys_descr, 'MikroTik RouterOS 7.12')
+        self.assertEqual(restored.uptime, '42 days')
+        self.assertEqual(restored.interfaces[1].alias, 'Uplink to ISP')
+        self.assertEqual(restored.interfaces[1].descr, 'GigabitEthernet1')
+        self.assertEqual(restored.interfaces[2].oper_status, 'down')
+        self.assertEqual(len(restored.lldp_neighbors), 1)
+        self.assertEqual(restored.lldp_neighbors[0].remote_sys_name, 'Edge-Rtr')
+
+        # Test dialogs apply dark theme
+        dlg = DeviceDetailDialog(dev)
+        self.assertEqual(dlg.styleSheet(), _DARK_DIALOG_STYLE)
+        link_dlg = LinkCreationDialog('A', [], 'B', [])
+        self.assertEqual(link_dlg.styleSheet(), _DARK_DIALOG_STYLE)
+        grp_dlg = GroupDevicesDialog([dev])
+        self.assertEqual(grp_dlg.styleSheet(), _DARK_DIALOG_STYLE)
+        edit_dlg = LinkEditDialog('A', 'p1', 'B', 'p2')
+        self.assertEqual(edit_dlg.styleSheet(), _DARK_DIALOG_STYLE)
+
+    def test_legacy_map_lldp_neighbor_reconstruction(self):
+        """Verify that legacy maps with empty lldp_neighbors reconstruct them from links."""
+        import sys
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication(sys.argv)
+        from balenolib.topology.gui.detail import DeviceDetailDialog
+
+        # Simulate legacy map dict where lldp_neighbors is empty or omitted
+        legacy_data = {
+            'version': 3,
+            'devices': {
+                'dev1': {
+                    'id': 'dev1', 'ip': '10.0.0.1', 'hostname': 'Switch1',
+                    'role': 'switch', 'chassis_id': '00:11:22:33:44:55',
+                    'interfaces': {'1': {'name': 'Gi0/1', 'descr': '', 'alias': '', 'oper_status': 'up'}},
+                    'lldp_neighbors': [],
+                },
+                'dev2': {
+                    'id': 'dev2', 'ip': '10.0.0.2', 'hostname': 'Switch2',
+                    'role': 'switch', 'chassis_id': '66:77:88:99:AA:BB',
+                    'interfaces': {'1': {'name': 'Gi0/24', 'descr': '', 'alias': '', 'oper_status': 'up'}},
+                    'lldp_neighbors': [],
+                }
+            },
+            'links': [
+                {
+                    'source_id': 'dev1', 'source_port': 'Gi0/1',
+                    'target_id': 'dev2', 'target_port': 'Gi0/24',
+                    'source_ifindex': 1, 'lag': False, 'weight': 1, 'status': 'up'
+                }
+            ]
+        }
+
+        graph = TopologyGraph.from_dict(legacy_data)
+        d1 = graph.devices['dev1']
+        d2 = graph.devices['dev2']
+
+        # Both devices must have reconstructed their lldp_neighbors from the link
+        self.assertEqual(len(d1.lldp_neighbors), 1)
+        self.assertEqual(d1.lldp_neighbors[0].local_port_name, 'Gi0/1')
+        self.assertEqual(d1.lldp_neighbors[0].remote_sys_name, 'Switch2')
+        self.assertEqual(d1.lldp_neighbors[0].remote_port_id, 'Gi0/24')
+        self.assertEqual(d1.lldp_neighbors[0].remote_chassis_id, '66:77:88:99:AA:BB')
+        self.assertEqual(d1.lldp_neighbors[0].remote_mgmt_addr, '10.0.0.2')
+
+        self.assertEqual(len(d2.lldp_neighbors), 1)
+        self.assertEqual(d2.lldp_neighbors[0].local_port_name, 'Gi0/24')
+        self.assertEqual(d2.lldp_neighbors[0].remote_sys_name, 'Switch1')
+        self.assertEqual(d2.lldp_neighbors[0].remote_port_id, 'Gi0/1')
+        self.assertEqual(d2.lldp_neighbors[0].remote_chassis_id, '00:11:22:33:44:55')
+        self.assertEqual(d2.lldp_neighbors[0].remote_mgmt_addr, '10.0.0.1')
+
+        # Test that DeviceDetailDialog shows the reconstructed neighbor in LLDP tab
+        dlg = DeviceDetailDialog(d1, graph=graph)
+        tabs = dlg.findChild(QApplication.instance().allWidgets()[0].__class__, '')
+        # Verify dialog table has row populated
+        from PyQt6.QtWidgets import QTableWidget
+        tables = dlg.findChildren(QTableWidget)
+        self.assertGreaterEqual(len(tables), 2)  # Interfaces and Neighbors
+        # The neighbors table should have 1 row
+        nbr_table = next(t for t in tables if t.horizontalHeaderItem(0) and t.horizontalHeaderItem(0).text() == 'Local Port')
+        self.assertEqual(nbr_table.rowCount(), 1)
+        self.assertEqual(nbr_table.item(0, 0).text(), 'Gi0/1')
+        self.assertEqual(nbr_table.item(0, 1).text(), 'Switch2')
+        self.assertEqual(nbr_table.item(0, 2).text(), 'Gi0/24')
+
+    def test_line_thickness_and_column_resize_and_confirm_deletion(self):
+        """Test edge line thickness mapping, interactive column resize mode, and deletion confirmation."""
+        import sys
+        from PyQt6.QtWidgets import QApplication, QHeaderView, QMessageBox, QTableWidget
+        from balenolib.topology.gui.view import EdgeItem, TopologyView
+        from balenolib.topology.gui.detail import DeviceDetailDialog
+        from balenolib.topology.models import PortLink, Device, DeviceRole, TopologyGraph
+        from balenolib.topology.actions import TopologyActions
+
+        app = QApplication.instance() or QApplication(sys.argv)
+
+        # 1. Test EdgeItem line thickness mapping
+        from balenolib.topology.gui.view import NodeItem
+        d_src = Device(id='s1', ip='10.0.0.1', hostname='S1')
+        d_tgt = Device(id='s2', ip='10.0.0.2', hostname='S2')
+        n_src = NodeItem(d_src)
+        n_tgt = NodeItem(d_tgt)
+        link = PortLink(source_id='s1', target_id='s2', source_port='p1', target_port='p2', weight=1)
+        edge = EdgeItem(link, n_src, n_tgt)
+        self.assertEqual(edge._pen_width(), 1.0)
+        self.assertEqual(edge._pen().widthF(), 1.0)
+
+        link.weight = 3
+        self.assertEqual(edge._pen_width(), 3.0)
+        self.assertEqual(edge._pen().widthF(), 3.0)
+
+        link.weight = 5
+        self.assertEqual(edge._pen_width(), 6.0)
+        self.assertEqual(edge._pen().widthF(), 6.0)
+
+        # 2. Test DeviceDetailDialog tables have Interactive resize mode
+        dev = Device(id='dev_test', ip='10.0.0.1', hostname='Router1', role=DeviceRole.ROUTER)
+        dlg = DeviceDetailDialog(dev, graph=TopologyGraph())
+        tables = dlg.findChildren(QTableWidget)
+        self.assertGreaterEqual(len(tables), 2)
+        for table in tables:
+            self.assertEqual(table.horizontalHeader().sectionResizeMode(0), QHeaderView.ResizeMode.Interactive)
+            self.assertFalse(table.horizontalHeader().stretchLastSection())
+
+        # 3. Test Deletion confirmation dialog
+        view = TopologyView()
+        with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Yes):
+            self.assertTrue(view._confirm_deletion("Remover?"))
+
+        with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.No):
+            self.assertFalse(view._confirm_deletion("Remover?"))
+
+        # 4. Test TopologyActions._remove_nodes respects cancellation
+        main_win = MagicMock()
+        main_win.topology_page.view = view
+        view.remove_nodes = MagicMock()
+
+        # When user cancels (exec -> No)
+        with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.No):
+            TopologyActions._remove_nodes(main_win, [dev])
+            view.remove_nodes.assert_not_called()
+
+        # When user confirms (exec -> Yes)
+        with patch.object(QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Yes):
+            TopologyActions._remove_nodes(main_win, [dev])
+            view.remove_nodes.assert_called_once_with([dev])
+
+    def test_default_thickness_and_lldp_thickness(self):
+        """Verify that default link/node thickness is 2 and LLDP-detected devices/links have thickness 1."""
+        from balenolib.topology.models import PortLink, Device, DeviceRole, LldpNeighbor
+        from balenolib.topology.engine import TopologyEngine
+        from balenolib.topology.gui.view import EdgeItem, NodeItem
+
+        # 1. Default PortLink weight is 2
+        default_link = PortLink(source_id='a', target_id='b', source_port='p1', target_port='p2')
+        self.assertEqual(default_link.weight, 2)
+
+        d1 = Device(id='d1', ip='10.0.0.1', hostname='Seed1')
+        d2 = Device(id='d2', ip='10.0.0.2', hostname='Seed2')
+        n1 = NodeItem(d1)
+        n2 = NodeItem(d2)
+        edge = EdgeItem(default_link, n1, n2)
+        self.assertEqual(edge._pen_width(), 2.0)
+
+        # 2. TopologyEngine assigns weight=2 to seed links and weight=1 to LLDP neighbor links
+        # d1 and d2 in seed network 10.0.0.0/24
+        # d3 in 192.168.1.1 (LLDP neighbor)
+        d3 = Device(id='d3', ip='192.168.1.1', hostname='Neighbor3')
+        d1.lldp_neighbors.append(LldpNeighbor(
+            local_port_name='Gi0/1', remote_sys_name='Seed2', remote_port_id='Gi0/1',
+            remote_mgmt_addr='10.0.0.2', remote_chassis_id='d2'
+        ))
+        d1.lldp_neighbors.append(LldpNeighbor(
+            local_port_name='Gi0/2', remote_sys_name='Neighbor3', remote_port_id='Gi0/24',
+            remote_mgmt_addr='192.168.1.1', remote_chassis_id='d3'
+        ))
+
+        engine = TopologyEngine()
+        graph = engine.build([d1, d2, d3], seed_networks=['10.0.0.0/24'])
+
+        # Seed1 (10.0.0.1) is layer 1, Seed2 (10.0.0.2) is layer 1
+        # Neighbor3 (192.168.1.1) is layer 2
+        self.assertEqual(graph.devices['d1'].layer, 1)
+        self.assertEqual(graph.devices['d2'].layer, 1)
+        self.assertEqual(graph.devices['d3'].layer, 2)
+
+        # Link between d1 and d2 (both seeds) -> weight 2 (default)
+        link_seed = next(l for l in graph.links if l.touches('d1') and l.touches('d2'))
+        self.assertEqual(link_seed.weight, 2)
+
+        # Link between d1 and d3 (LLDP neighbor) -> weight 1
+        link_lldp = next(l for l in graph.links if l.touches('d1') and l.touches('d3'))
+        self.assertEqual(link_lldp.weight, 1)
+
+        # 3. NodeItem border thickness
+        node_seed = NodeItem(graph.devices['d1'])
+        node_lldp = NodeItem(graph.devices['d3'])
+
+        # Seeds have layer=1 (border width 2.0), LLDP neighbors have layer>1 (border width 1.0)
+        is_seed_lldp = getattr(node_seed.device, 'layer', 1) > 1
+        self.assertFalse(is_seed_lldp)
+
+        is_nbr_lldp = getattr(node_lldp.device, 'layer', 1) > 1
+        self.assertTrue(is_nbr_lldp)
+
 
 if __name__ == '__main__':
     unittest.main()
+

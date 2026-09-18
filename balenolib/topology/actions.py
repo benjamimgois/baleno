@@ -412,7 +412,18 @@ class TopologyActions:
 
     @staticmethod
     def _remove_nodes(main_window, devices: list[Any]) -> None:
+        if not devices:
+            return
         view = getattr(getattr(main_window, 'topology_page', None), 'view', None)
+        if view is not None and hasattr(view, '_confirm_deletion'):
+            count = len(devices)
+            if count == 1:
+                lbl = getattr(devices[0], 'label', str(devices[0]))
+                msg = f"Deseja realmente remover o dispositivo '{lbl}'?"
+            else:
+                msg = f"Deseja realmente remover os {count} dispositivos selecionados?"
+            if not view._confirm_deletion(msg):
+                return
         if view is not None:
             if hasattr(view, 'remove_nodes'):
                 view.remove_nodes(devices)

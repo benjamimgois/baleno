@@ -21,7 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QGraphicsItem, QGraphicsObject, QGraphicsPathItem, QGraphicsScene,
-    QGraphicsView, QLabel, QMenu, QDialog, QFrame, QToolButton, QVBoxLayout,
+    QGraphicsView, QLabel, QMenu, QDialog, QFrame, QMessageBox, QToolButton, QVBoxLayout,
 )
 
 from balenolib.topology.models import (
@@ -475,7 +475,10 @@ class NodeItem(QGraphicsObject):
         border = status if self.isSelected() is False else ACCENT
 
         painter.setBrush(NODE_BG)
-        pen = QPen(ACCENT if self.isSelected() else NODE_BORDER, 2 if self.isSelected() else 1.5)
+        is_lldp = getattr(self.device, 'layer', 1) > 1
+        node_border_width = 1.0 if is_lldp else 2.0
+        pen = QPen(ACCENT if self.isSelected() else NODE_BORDER,
+                   2.5 if self.isSelected() else node_border_width)
         painter.setPen(pen)
         painter.drawRoundedRect(rect, 10, 10)
 
@@ -593,10 +596,22 @@ class EdgeItem(QGraphicsPathItem):
         self.update_path()
         self.refresh_state()
 
+    THICKNESS_MAP = {
+        1: 1.0,
+        2: 2.0,
+        3: 3.0,
+        4: 4.5,
+        5: 6.0,
+    }
+
+    def _pen_width(self) -> float:
+        w = getattr(self.link, 'weight', 2) or 2
+        return self.THICKNESS_MAP.get(w, 2.0)
+
     def shape(self) -> QPainterPath:
         """Widen the hit area so the thin line is easy to right-click."""
         stroker = QPainterPathStroker()
-        stroker.setWidth(self.HIT_WIDTH)
+        stroker.setWidth(max(self.HIT_WIDTH, self._pen_width() + 6.0))
         return stroker.createStroke(self.path())
 
     def contextMenuEvent(self, event) -> None:
@@ -670,9 +685,10 @@ class EdgeItem(QGraphicsPathItem):
             self.state = 'active'
 
     def _pen(self) -> QPen:
+        w = self._pen_width()
         if self.state == 'down':
-            return QPen(DOWN_COLOR, 2.5)
-        pen = QPen(speed_color(self.link_speed()), 2.0)
+            return QPen(DOWN_COLOR, max(1.5, w))
+        pen = QPen(speed_color(self.link_speed()), w)
         pen.setDashPattern(DASH_PATTERN)
         pen.setDashOffset(self._dash_offset)
         return pen
@@ -716,7 +732,7 @@ class EdgeItem(QGraphicsPathItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.isSelected():
-            painter.setPen(QPen(QColor(255, 255, 255, 150), 6))
+            painter.setPen(QPen(QColor(255, 255, 255, 150), self._pen_width() + 4.0))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self.path())
         painter.setPen(self._pen())
@@ -1540,6 +1556,22 @@ class TopologyView(QGraphicsView):
             act.setChecked(edge.link.override_speed == mbps)
             v_acts.append((act, mbps))
 
+        thick_menu = menu.addMenu('Espessura da linha')
+        current_weight = getattr(edge.link, 'weight', 2) or 2
+        thick_opts = [
+            (1, '1 px — Muito fina'),
+            (2, '2 px — Padrão'),
+            (3, '3 px — Média'),
+            (4, '4 px — Grossa'),
+            (5, '6 px — Muito grossa'),
+        ]
+        t_acts: list[tuple] = []
+        for lvl, lbl in thick_opts:
+            act = thick_menu.addAction(lbl)
+            act.setCheckable(True)
+            act.setChecked(current_weight == lvl)
+            t_acts.append((act, lvl))
+
         menu.addSeparator()
         edit_act = menu.addAction('Edit') if edge.link.manual else None
         delete_act = menu.addAction('Delete')
@@ -1551,6 +1583,9 @@ class TopologyView(QGraphicsView):
             self._edit_manual_link(edge)
             return
         if chosen is delete_act:
+            msg = f"Deseja realmente remover a conexão '{edge.link.source_port} ⟷ {edge.link.target_port}'?"
+            if not self._confirm_deletion(msg):
+                return
             self._scene.remove_edge(edge)
             self._schedule_save()
             return
@@ -1563,10 +1598,17 @@ class TopologyView(QGraphicsView):
         elif chosen is v_auto:
             edge.link.override_speed = None
         else:
+            handled = False
             for act, mbps in v_acts:
                 if chosen is act:
                     edge.link.override_speed = mbps
+                    handled = True
                     break
+            if not handled:
+                for act, lvl in t_acts:
+                    if chosen is act:
+                        edge.link.weight = lvl
+                        break
         edge.refresh_state()
         edge.update()
         self._schedule_save()
@@ -1931,26 +1973,88 @@ class TopologyView(QGraphicsView):
         self._scene.clusters = {}
         self._scene._manual_counter = 0
 
+    def _confirm_deletion(self, text: str) -> bool:
+        """Prompt the user with a dark-styled confirmation dialog before deleting."""
+        box = QMessageBox(self)
+        box.setWindowTitle('Confirmar Exclusão')
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = box.button(QMessageBox.StandardButton.Yes)
+        if yes_btn:
+            yes_btn.setText('Sim')
+        no_btn = box.button(QMessageBox.StandardButton.No)
+        if no_btn:
+            no_btn.setText('Não')
+        box.setStyleSheet("""
+            QMessageBox {
+                background-color: #161B22;
+                color: #C9D1D9;
+            }
+            QLabel {
+                color: #C9D1D9;
+                font-size: 10pt;
+            }
+            QPushButton {
+                background-color: #21262D;
+                color: #C9D1D9;
+                border: 1px solid #30363D;
+                border-radius: 4px;
+                padding: 6px 18px;
+                min-width: 65px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #30363D;
+                color: #ffffff;
+            }
+        """)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape and self._scene._link_mode:
             self.set_link_mode(False)
             event.accept()
             return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            nodes_to_remove = [item for item in self._scene.selectedItems() if isinstance(item, NodeItem)]
+            selected = self._scene.selectedItems()
+            nodes_to_remove = [item for item in selected if isinstance(item, NodeItem)]
+            edges_to_remove = [item for item in selected if isinstance(item, EdgeItem)]
+            if not nodes_to_remove and not edges_to_remove:
+                return
+
+            parts = []
             if nodes_to_remove:
-                self.undo_stack.beginMacro('Delete Devices')
-                for item in nodes_to_remove:
-                    dev = item.device
-                    pos = item.pos()
-                    connected_links = []
-                    if self._scene.graph is not None:
-                        connected_links = [l for l in self._scene.graph.links
-                                           if l.source_id == dev.id or l.target_id == dev.id]
-                    self._scene.remove_node(dev.id)
-                    self.undo_stack.push(RemoveDeviceCommand(self, dev, pos, connected_links))
-                self.undo_stack.endMacro()
-                self._schedule_save()
+                if len(nodes_to_remove) == 1:
+                    parts.append(f"o dispositivo '{nodes_to_remove[0].device.label}'")
+                else:
+                    parts.append(f"{len(nodes_to_remove)} dispositivos")
+            if edges_to_remove:
+                if len(edges_to_remove) == 1:
+                    e = edges_to_remove[0]
+                    parts.append(f"a conexão '{e.link.source_port} ⟷ {e.link.target_port}'")
+                else:
+                    parts.append(f"{len(edges_to_remove)} conexões")
+
+            msg = f"Deseja realmente remover {' e '.join(parts)}?"
+            if not self._confirm_deletion(msg):
+                return
+
+            self.undo_stack.beginMacro('Delete Items')
+            for edge in edges_to_remove:
+                self._scene.remove_edge(edge)
+            for item in nodes_to_remove:
+                dev = item.device
+                pos = item.pos()
+                connected_links = []
+                if self._scene.graph is not None:
+                    connected_links = [l for l in self._scene.graph.links
+                                       if l.source_id == dev.id or l.target_id == dev.id]
+                self._scene.remove_node(dev.id)
+                self.undo_stack.push(RemoveDeviceCommand(self, dev, pos, connected_links))
+            self.undo_stack.endMacro()
+            self._schedule_save()
             return
         super().keyPressEvent(event)
 

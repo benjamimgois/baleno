@@ -158,6 +158,24 @@ class TopologyEngine:
         g.orphans = [d.id for d in devices if d.id not in linked]
         g.loops = self.detect_cycles(g)
         self.assign_levels(g, seed_networks)
+
+        # Assign link thickness: standard default is 2 px, while links connected
+        # to devices detected via LLDP (layer > 1) have thickness 1 px.
+        for link in g.links:
+            if link.manual:
+                continue
+            src_dev = g.devices.get(link.source_id)
+            tgt_dev = g.devices.get(link.target_id)
+            is_lldp = False
+            if src_dev is not None and src_dev.layer > 1:
+                is_lldp = True
+            elif tgt_dev is not None and tgt_dev.layer > 1:
+                is_lldp = True
+            elif src_dev is None or tgt_dev is None:
+                is_lldp = True
+
+            link.weight = 1 if is_lldp else 2
+
         self.graph = g
         return g
 

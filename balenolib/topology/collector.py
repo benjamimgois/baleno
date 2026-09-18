@@ -438,17 +438,23 @@ class LldpCollector:
                 continue
             device.interfaces[idx] = Interface(index=idx, name=val)
 
-        def _apply(rows, base_oid, attr):
-            for oid, val in rows:
-                try:
-                    idx = int(_oid_suffix(oid, base_oid)[-1])
-                except (IndexError, ValueError):
-                    continue
-                if idx in device.interfaces:
-                    setattr(device.interfaces[idx], attr, val)
+        for oid, val in descrs:
+            try:
+                idx = int(_oid_suffix(oid, OID_IF_DESCR)[-1])
+            except (IndexError, ValueError):
+                continue
+            if idx not in device.interfaces:
+                device.interfaces[idx] = Interface(index=idx, name=val, descr=val)
+            else:
+                device.interfaces[idx].descr = val
 
-        _apply(descrs, OID_IF_DESCR, 'descr')
-        _apply(aliases, OID_IF_ALIAS, 'alias')
+        for oid, val in aliases:
+            try:
+                idx = int(_oid_suffix(oid, OID_IF_ALIAS)[-1])
+            except (IndexError, ValueError):
+                continue
+            if idx in device.interfaces:
+                device.interfaces[idx].alias = val
         for oid, val in statuses:
             try:
                 idx = int(_oid_suffix(oid, OID_IF_OPER_STATUS)[-1])

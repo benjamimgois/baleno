@@ -110,12 +110,31 @@ class Device:
         """
         interfaces: dict[str, dict[str, Any]] = {}
         for idx, iface in self.interfaces.items():
-            if iface.name:
+            if iface.name or iface.descr:
                 interfaces[str(idx)] = {
                     'name': iface.name,
+                    'descr': iface.descr,
+                    'alias': iface.alias,
                     'oper_status': iface.oper_status,
                     'speed_mbps': iface.speed_mbps,
                 }
+        neighbors: list[dict[str, Any]] = []
+        for n in self.lldp_neighbors:
+            neighbors.append({
+                'local_port_num': n.local_port_num,
+                'local_port_name': n.local_port_name,
+                'remote_index': n.remote_index,
+                'remote_chassis_id': n.remote_chassis_id,
+                'remote_chassis_subtype': n.remote_chassis_subtype,
+                'remote_port_id': n.remote_port_id,
+                'remote_port_subtype': n.remote_port_subtype,
+                'remote_port_desc': n.remote_port_desc,
+                'remote_sys_name': n.remote_sys_name,
+                'remote_sys_desc': n.remote_sys_desc,
+                'remote_mgmt_addr': n.remote_mgmt_addr,
+                'remote_mgmt_addr_oid': n.remote_mgmt_addr_oid,
+                'time_mark': n.time_mark,
+            })
         return {
             'id': self.id,
             'ip': self.ip,
@@ -123,11 +142,15 @@ class Device:
             'role': self.role.value,
             'vendor': self.vendor,
             'model': self.model,
+            'sys_descr': self.sys_descr,
             'chassis_id': self.chassis_id,
             'status': self.status,
+            'uptime': self.uptime,
+            'latency_ms': self.latency_ms,
             'layer': self.layer,
             'layers': sorted(self.layers),
             'interfaces': interfaces,
+            'lldp_neighbors': neighbors,
         }
 
     @classmethod
@@ -143,8 +166,11 @@ class Device:
             role=role,
             vendor=str(data.get('vendor', '') or ''),
             model=str(data.get('model', '') or ''),
+            sys_descr=str(data.get('sys_descr', '') or ''),
             chassis_id=str(data.get('chassis_id', '') or ''),
             status=str(data.get('status', 'unknown') or 'unknown'),
+            uptime=str(data.get('uptime', '') or ''),
+            latency_ms=float(data.get('latency_ms', 0.0) or 0.0),
             layer=int(data.get('layer', 0) or 0),
             layers=set(data.get('layers') or []),
         )
@@ -156,9 +182,28 @@ class Device:
             device.interfaces[idx] = Interface(
                 index=idx,
                 name=str(ifdata.get('name', '')),
+                descr=str(ifdata.get('descr', '') or ''),
+                alias=str(ifdata.get('alias', '') or ''),
                 oper_status=str(ifdata.get('oper_status', 'up') or 'up'),
                 speed_mbps=float(ifdata.get('speed_mbps', 0) or 0),
             )
+        for ndata in data.get('lldp_neighbors') or []:
+            if isinstance(ndata, dict):
+                device.lldp_neighbors.append(LldpNeighbor(
+                    local_port_num=int(ndata.get('local_port_num', 0) or 0),
+                    local_port_name=str(ndata.get('local_port_name', '') or ''),
+                    remote_index=int(ndata.get('remote_index', 0) or 0),
+                    remote_chassis_id=str(ndata.get('remote_chassis_id', '') or ''),
+                    remote_chassis_subtype=str(ndata.get('remote_chassis_subtype', '') or ''),
+                    remote_port_id=str(ndata.get('remote_port_id', '') or ''),
+                    remote_port_subtype=str(ndata.get('remote_port_subtype', '') or ''),
+                    remote_port_desc=str(ndata.get('remote_port_desc', '') or ''),
+                    remote_sys_name=str(ndata.get('remote_sys_name', '') or ''),
+                    remote_sys_desc=str(ndata.get('remote_sys_desc', '') or ''),
+                    remote_mgmt_addr=str(ndata.get('remote_mgmt_addr', '') or ''),
+                    remote_mgmt_addr_oid=str(ndata.get('remote_mgmt_addr_oid', '') or ''),
+                    time_mark=int(ndata.get('time_mark', 0) or 0),
+                ))
         return device
 
 
@@ -172,7 +217,7 @@ class PortLink:
     target_port: str
     source_ifindex: int = 0          # ifIndex of the source-side interface (0 = unknown)
     lag: bool = False                # bundled into a LAG (multiple parallel links)
-    weight: int = 1
+    weight: int = 2
     status: str = 'up'
     override_status: Optional[str] = None   # None=auto | 'up' | 'down'
     override_speed: Optional[float] = None  # None=auto | Mbps
@@ -216,7 +261,7 @@ class PortLink:
             target_port=str(data.get('target_port', '') or ''),
             source_ifindex=int(data.get('source_ifindex', 0) or 0),
             lag=bool(data.get('lag', False)),
-            weight=int(data.get('weight', 1) or 1),
+            weight=int(data.get('weight', 2) or 2),
             status=str(data.get('status', 'up') or 'up'),
             override_status=data.get('override_status') or None,
             override_speed=(float(data.get('override_speed'))
@@ -261,4 +306,36 @@ class TopologyGraph:
             link = PortLink.from_dict(ldata)
             if link.source_id in graph.devices and link.target_id in graph.devices:
                 graph.links.append(link)
+
+        # Reconstruct lldp_neighbors for devices where lldp_neighbors was empty
+        # (e.g. legacy maps saved before neighbor persistence was introduced)
+        for did, dev in graph.devices.items():
+            if not dev.lldp_neighbors:
+                seen: set[tuple[str, str, str]] = set()
+                for link in graph.links:
+                    if link.source_id == did:
+                        tgt = graph.devices.get(link.target_id)
+                        key = (link.source_port, link.target_id, link.target_port)
+                        if key not in seen:
+                            seen.add(key)
+                            dev.lldp_neighbors.append(LldpNeighbor(
+                                local_port_num=link.source_ifindex,
+                                local_port_name=link.source_port,
+                                remote_chassis_id=tgt.chassis_id if tgt else link.target_id,
+                                remote_port_id=link.target_port,
+                                remote_sys_name=tgt.hostname or (tgt.label if tgt else link.target_id),
+                                remote_mgmt_addr=tgt.ip if tgt else '',
+                            ))
+                    elif link.target_id == did:
+                        src = graph.devices.get(link.source_id)
+                        key = (link.target_port, link.source_id, link.source_port)
+                        if key not in seen:
+                            seen.add(key)
+                            dev.lldp_neighbors.append(LldpNeighbor(
+                                local_port_name=link.target_port,
+                                remote_chassis_id=src.chassis_id if src else link.source_id,
+                                remote_port_id=link.source_port,
+                                remote_sys_name=src.hostname or (src.label if src else link.source_id),
+                                remote_mgmt_addr=src.ip if src else '',
+                            ))
         return graph
