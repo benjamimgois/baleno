@@ -12,7 +12,10 @@ from __future__ import annotations
 import json
 import os
 
-from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, Qt, QTimer
+from PyQt6.QtCore import (
+    QMimeData, QPoint, QPointF, QRectF, Qt, QTimer,
+    QPropertyAnimation, QEasingCurve,
+)
 from PyQt6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
@@ -28,6 +31,7 @@ from balenolib.topology.gui.view import (
     TopologyView, DEVICE_MIME, role_renderer, GroupNodeItem,
 )
 from balenolib.topology.gui.layers import LayerTreeWidget
+from balenolib.topology.gui.accordion import AccordionWidget, CollapsibleSection
 from balenolib.topology.gui.detail import (
     DeviceDetailDialog, GroupDevicesDialog, LinkCreationDialog,
 )
@@ -93,7 +97,7 @@ _TAB_STYLE = f"""
         background-color: {_BG}; border-bottom: 1px solid {_BORDER};
     }}
     QFrame#topologySidebar {{
-        background-color: {_BG}; border-left: 1px solid {_BORDER};
+        background-color: {_BG}; border-right: 1px solid {_BORDER};
     }}
 """
 
@@ -301,9 +305,26 @@ class TopologyTab(QWidget):
         self.snmp_dialog = SnmpDialog(self._config, self)
         self.snmp_dialog.version_combo.currentIndexChanged.connect(self._on_snmp_version_changed)
 
+        self._search_matches: list[str] = []
+        self._search_match_idx = 0
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+
+        # Build view first so topbar buttons can bind to it
+        self.view = TopologyView()
+        self.view.set_layout_path(default_map_path())
+        self.view._scene.node_double_clicked.connect(self._on_node_double_clicked)
+        self.view._scene.group_clicked.connect(self._on_group_clicked)
+        self.view._scene.node_context_menu_requested.connect(self._on_node_context_menu)
+        self.view._scene.group_context_menu_requested.connect(self._on_group_context_menu)
+        self.view._scene.link_requested.connect(self._on_link_requested)
+        self.view._scene.link_mode_changed.connect(self._on_link_mode_changed)
+
+        self._link_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._link_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._link_shortcut.activated.connect(self._cancel_link_mode)
 
         # Top control bar
         root.addWidget(self._build_top_bar())
@@ -314,24 +335,33 @@ class TopologyTab(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.view = TopologyView()
-        self.view.set_layout_path(default_map_path())
-        self.view._scene.node_double_clicked.connect(self._on_node_double_clicked)
-        self.view._scene.group_clicked.connect(self._on_group_clicked)
-        self.view._scene.node_context_menu_requested.connect(self._on_node_context_menu)
-        self.view._scene.group_context_menu_requested.connect(self._on_group_context_menu)
-        self.view._scene.link_requested.connect(self._on_link_requested)
-        self._link_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
-        self._link_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self._link_shortcut.activated.connect(self._cancel_link_mode)
-
-        content_layout.addWidget(self.view, 1)
-
-        # Right sidebar (Layers + Object palette)
+        # Left sidebar (Accordion: Objects 1st, Layers 2nd, Discovery 3rd)
         self.sidebar = self._build_sidebar()
         content_layout.addWidget(self.sidebar)
 
+        # Canvas on the right
+        content_layout.addWidget(self.view, 1)
+
         root.addWidget(content, 1)
+
+        # Wire undo / redo stack
+        self.view.undo_stack.canUndoChanged.connect(self.undo_btn.setEnabled)
+        self.view.undo_stack.canRedoChanged.connect(self.redo_btn.setEnabled)
+        self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
+        self._undo_shortcut.activated.connect(self._on_undo)
+        self._redo_shortcut = QShortcut(QKeySequence.StandardKey.Redo, self)
+        self._redo_shortcut.activated.connect(self._on_redo)
+        self._redo_shortcut_y = QShortcut(QKeySequence('Ctrl+Y'), self)
+        self._redo_shortcut_y.activated.connect(self._on_redo)
+
+        # Smooth sidebar animation
+        self._sidebar_anim = QPropertyAnimation(self.sidebar, b"maximumWidth")
+        self._sidebar_anim.setDuration(220)
+        self._sidebar_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._sidebar_anim.finished.connect(self._on_sidebar_anim_finished)
+
+        self._panel_shortcut = QShortcut(QKeySequence('Ctrl+B'), self)
+        self._panel_shortcut.activated.connect(self.sidebar_toggle_btn.toggle)
 
         # Load saved map and restore state
         if self.view.load_saved_map():
@@ -345,63 +375,38 @@ class TopologyTab(QWidget):
 
         QApplication.instance().aboutToQuit.connect(self.shutdown)
 
+    @staticmethod
+    def _vsep() -> QFrame:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(f'color: {_BORDER}; margin: 2px 2px;')
+        return sep
+
     # ── Top Bar ──────────────────────────────────────────────────────────
 
     def _build_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setObjectName('topBar')
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(6)
 
-        layout.addWidget(QLabel('Networks:'))
-        self.networks_edit = QLineEdit()
-        self.networks_edit.setPlaceholderText('10.0.0.0/24, 192.168.1.0/24')
-        self.networks_edit.setFixedWidth(200)
-        layout.addWidget(self.networks_edit)
+        # 1. Sidebar Toggle Button
+        self.sidebar_toggle_btn = QToolButton()
+        self.sidebar_toggle_btn.setText('☷ Panel')
+        self.sidebar_toggle_btn.setCheckable(True)
+        self.sidebar_toggle_btn.setChecked(True)
+        self.sidebar_toggle_btn.setToolTip('Toggle sidebar panel (Ctrl+B)')
+        self.sidebar_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sidebar_toggle_btn.toggled.connect(self._toggle_sidebar)
+        layout.addWidget(self.sidebar_toggle_btn)
 
-        layout.addWidget(QLabel('Layer:'))
-        self.layer_name_edit = QLineEdit()
-        self.layer_name_edit.setPlaceholderText('Rede-A')
-        self.layer_name_edit.setFixedWidth(90)
-        layout.addWidget(self.layer_name_edit)
+        layout.addWidget(self._vsep())
 
-        self.snmp_btn = QToolButton()
-        self.snmp_btn.setText('⚙ SNMP: v2c ▾')
-        self.snmp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.snmp_btn.setToolTip('SNMP Version & Credentials')
-        self.snmp_btn.clicked.connect(self._show_snmp_dialog)
-        layout.addWidget(self.snmp_btn)
-
-        self.discover_btn = QPushButton('Discover')
-        self.discover_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.discover_btn.clicked.connect(self.start_discovery)
-        layout.addWidget(self.discover_btn)
-
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setFixedWidth(110)
-        layout.addWidget(self.progress)
-
-        self.status_label = QLabel('Idle')
-        self.status_label.setMinimumWidth(90)
-        layout.addWidget(self.status_label)
-
-        layout.addStretch(1)
-
-        layout.addWidget(QLabel('Layout:'))
-        self.layout_combo = QComboBox()
-        self.layout_combo.addItem('Tree', 'hierarchical')
-        self.layout_combo.addItem('Force', 'force')
-        self.layout_combo.addItem('Radial', 'concentric')
-        self.layout_combo.addItem('BFS', 'bfs')
-        self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
-        layout.addWidget(self.layout_combo)
-
+        # 2. File actions: Save & PNG
         self.save_btn = QToolButton()
         self.save_btn.setText('💾 Save')
-        self.save_btn.setToolTip('Save current layout and layers')
+        self.save_btn.setToolTip('Save current layout and positions')
         self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_btn.clicked.connect(self._save_map)
         layout.addWidget(self.save_btn)
@@ -413,19 +418,89 @@ class TopologyTab(QWidget):
         self.export_btn.clicked.connect(self._export_png)
         layout.addWidget(self.export_btn)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet(f'color: {_BORDER}; margin: 2px 4px;')
-        layout.addWidget(sep)
+        layout.addWidget(self._vsep())
 
-        self.sidebar_toggle_btn = QToolButton()
-        self.sidebar_toggle_btn.setText('☷ Panel')
-        self.sidebar_toggle_btn.setCheckable(True)
-        self.sidebar_toggle_btn.setChecked(True)
-        self.sidebar_toggle_btn.setToolTip('Toggle Layers & Objects sidebar')
-        self.sidebar_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.sidebar_toggle_btn.toggled.connect(self._toggle_sidebar)
-        layout.addWidget(self.sidebar_toggle_btn)
+        # 3. Undo / Redo
+        self.undo_btn = QToolButton()
+        self.undo_btn.setText('↶ Undo')
+        self.undo_btn.setToolTip('Undo last change (Ctrl+Z)')
+        self.undo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.undo_btn.setEnabled(False)
+        self.undo_btn.clicked.connect(self._on_undo)
+        layout.addWidget(self.undo_btn)
+
+        self.redo_btn = QToolButton()
+        self.redo_btn.setText('↷ Redo')
+        self.redo_btn.setToolTip('Redo change (Ctrl+Y / Ctrl+Shift+Z)')
+        self.redo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.redo_btn.setEnabled(False)
+        self.redo_btn.clicked.connect(self._on_redo)
+        layout.addWidget(self.redo_btn)
+
+        layout.addWidget(self._vsep())
+
+        # 4. Link tool
+        self.link_btn = QToolButton()
+        self.link_btn.setText('⚡ Link')
+        self.link_btn.setCheckable(True)
+        self.link_btn.setToolTip('Create link between two devices (Esc to cancel)')
+        self.link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.link_btn.toggled.connect(self._on_link_btn_toggled)
+        layout.addWidget(self.link_btn)
+
+        layout.addWidget(self._vsep())
+
+        # 5. Zoom tools
+        self.zoom_out_btn = QToolButton()
+        self.zoom_out_btn.setText('－')
+        self.zoom_out_btn.setToolTip('Zoom Out (-)')
+        self.zoom_out_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zoom_out_btn.clicked.connect(self.view.zoom_out)
+        layout.addWidget(self.zoom_out_btn)
+
+        self.zoom_reset_btn = QToolButton()
+        self.zoom_reset_btn.setText('100%')
+        self.zoom_reset_btn.setToolTip('Zoom 100% (Reset)')
+        self.zoom_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zoom_reset_btn.clicked.connect(self.view.zoom_reset)
+        layout.addWidget(self.zoom_reset_btn)
+
+        self.zoom_in_btn = QToolButton()
+        self.zoom_in_btn.setText('＋')
+        self.zoom_in_btn.setToolTip('Zoom In (+)')
+        self.zoom_in_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zoom_in_btn.clicked.connect(self.view.zoom_in)
+        layout.addWidget(self.zoom_in_btn)
+
+        self.zoom_fit_btn = QToolButton()
+        self.zoom_fit_btn.setText('⛶ Fit')
+        self.zoom_fit_btn.setToolTip('Fit map in view (Zoom Fit)')
+        self.zoom_fit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zoom_fit_btn.clicked.connect(self.view.fit_in_view)
+        layout.addWidget(self.zoom_fit_btn)
+
+        layout.addWidget(self._vsep())
+
+        # 6. Layout mode
+        layout.addWidget(QLabel('Layout:'))
+        self.layout_combo = QComboBox()
+        self.layout_combo.addItem('Tree', 'hierarchical')
+        self.layout_combo.addItem('Force', 'force')
+        self.layout_combo.addItem('Radial', 'concentric')
+        self.layout_combo.addItem('BFS', 'bfs')
+        self.layout_combo.currentIndexChanged.connect(self._on_layout_changed)
+        layout.addWidget(self.layout_combo)
+
+        layout.addStretch(1)
+
+        # 7. Fast search
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText('🔍 Search IP, host or vendor…')
+        self.search_edit.setFixedWidth(220)
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._on_search_text_changed)
+        self.search_edit.returnPressed.connect(self._on_search_enter)
+        layout.addWidget(self.search_edit)
 
         return bar
 
@@ -434,40 +509,34 @@ class TopologyTab(QWidget):
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
         sidebar.setObjectName('topologySidebar')
-        sidebar.setFixedWidth(265)
+        sidebar.setMinimumWidth(0)
+        sidebar.setMaximumWidth(275)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
 
-        # Layer Tree (GIMP-style)
-        self.layer_tree = LayerTreeWidget(sidebar)
-        self.layer_tree.layers_visibility_changed.connect(self._on_layers_visibility_changed)
-        self.layer_tree.fit_layer_requested.connect(self.view.fit_layer)
-        self.layer_tree.remove_layer_requested.connect(self._on_remove_layer_requested)
-        layout.addWidget(self.layer_tree, 1)
+        self.accordion = AccordionWidget(sidebar)
+        layout.addWidget(self.accordion, 1)
 
-        # Separator line
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f'color: {_BORDER};')
-        layout.addWidget(sep)
-
-        # Object Palette
+        # Section 1: Objects (expanded by default)
         palette_box = self._build_object_palette()
-        layout.addWidget(palette_box)
+        self.section_objects = self.accordion.add_section('Objects', palette_box, expanded=True)
+
+        # Section 2: Layers (expanded by default)
+        layers_box = self._build_layers_section(sidebar)
+        self.section_layers = self.accordion.add_section('Layers', layers_box, expanded=True)
+
+        # Section 3: Discovery (collapsed by default)
+        discovery_box = self._build_discovery_section()
+        self.section_discovery = self.accordion.add_section('Discovery', discovery_box, expanded=False)
 
         return sidebar
 
     def _build_object_palette(self) -> QWidget:
         box = QWidget()
         box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(0, 0, 0, 0)
+        box_layout.setContentsMargins(2, 2, 2, 2)
         box_layout.setSpacing(4)
-
-        header = QLabel('OBJECTS')
-        header.setFont(QFont('Sans', 8, QFont.Weight.Bold))
-        header.setStyleSheet(f'color: {_TEXT_MUTED}; letter-spacing: 1px;')
-        box_layout.addWidget(header)
 
         hint = QLabel('Drag to map to add device')
         hint.setFont(QFont('Sans', 7))
@@ -478,7 +547,7 @@ class TopologyTab(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet('QScrollArea { background: transparent; }')
-        scroll.setFixedHeight(125)
+        scroll.setFixedHeight(190)
 
         grid_w = QWidget()
         grid = QGridLayout(grid_w)
@@ -494,8 +563,104 @@ class TopologyTab(QWidget):
         box_layout.addWidget(scroll)
         return box
 
+    def _build_layers_section(self, parent) -> QWidget:
+        box = QWidget()
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(2, 2, 2, 2)
+        box_layout.setSpacing(4)
+
+        self.layer_tree = LayerTreeWidget(parent)
+        self.layer_tree.layers_visibility_changed.connect(self._on_layers_visibility_changed)
+        self.layer_tree.fit_layer_requested.connect(self.view.fit_layer)
+        self.layer_tree.remove_layer_requested.connect(self._on_remove_layer_requested)
+        self.layer_tree.setMinimumHeight(350)
+        box_layout.addWidget(self.layer_tree)
+        return box
+
+    def _build_discovery_section(self) -> QWidget:
+        box = QWidget()
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(4, 4, 4, 4)
+        box_layout.setSpacing(6)
+
+        box_layout.addWidget(QLabel('Networks (CIDR or IP):'))
+        self.networks_edit = QLineEdit()
+        self.networks_edit.setPlaceholderText('10.0.0.0/24, 192.168.1.0/24')
+        box_layout.addWidget(self.networks_edit)
+
+        box_layout.addWidget(QLabel('Layer Name:'))
+        self.layer_name_edit = QLineEdit()
+        self.layer_name_edit.setPlaceholderText('Network-A')
+        box_layout.addWidget(self.layer_name_edit)
+
+        self.snmp_btn = QToolButton()
+        self.snmp_btn.setText('⚙ SNMP: v2c ▾')
+        self.snmp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.snmp_btn.setToolTip('SNMP version and credentials')
+        self.snmp_btn.clicked.connect(self._show_snmp_dialog)
+        box_layout.addWidget(self.snmp_btn)
+
+        self.discover_btn = QPushButton('Discover')
+        self.discover_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.discover_btn.clicked.connect(self.start_discovery)
+        box_layout.addWidget(self.discover_btn)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        box_layout.addWidget(self.progress)
+
+        self.status_label = QLabel('Idle')
+        self.status_label.setStyleSheet(f'color: {_TEXT_MUTED}; font-size: 8pt;')
+        self.status_label.setWordWrap(True)
+        box_layout.addWidget(self.status_label)
+
+        return box
+
     def _toggle_sidebar(self, visible: bool) -> None:
-        self.sidebar.setVisible(visible)
+        self._sidebar_anim.stop()
+        start_w = self.sidebar.width()
+        if visible:
+            self.sidebar.setVisible(True)
+            self._sidebar_anim.setStartValue(start_w)
+            self._sidebar_anim.setEndValue(275)
+        else:
+            self._sidebar_anim.setStartValue(start_w)
+            self._sidebar_anim.setEndValue(0)
+        self._sidebar_anim.start()
+
+    def _on_sidebar_anim_finished(self) -> None:
+        if not self.sidebar_toggle_btn.isChecked():
+            self.sidebar.setVisible(False)
+
+    def _on_undo(self) -> None:
+        if self.view.undo_stack.canUndo():
+            self.view.undo_stack.undo()
+
+    def _on_redo(self) -> None:
+        if self.view.undo_stack.canRedo():
+            self.view.undo_stack.redo()
+
+    def _on_link_btn_toggled(self, on: bool) -> None:
+        self.view.set_link_mode(on)
+
+    def _on_link_mode_changed(self, on: bool) -> None:
+        self.link_btn.blockSignals(True)
+        self.link_btn.setChecked(on)
+        self.link_btn.blockSignals(False)
+
+    def _on_search_text_changed(self, text: str) -> None:
+        self._search_matches = self.view.highlight_matches(text)
+        self._search_match_idx = 0
+
+    def _on_search_enter(self) -> None:
+        if not self._search_matches:
+            self._search_matches = self.view.highlight_matches(self.search_edit.text())
+            self._search_match_idx = 0
+        if self._search_matches:
+            target_id = self._search_matches[self._search_match_idx % len(self._search_matches)]
+            self._search_match_idx += 1
+            self.view.focus_device(target_id)
 
     # ── Actions & Layouts ────────────────────────────────────────────────
 
@@ -621,6 +786,8 @@ class TopologyTab(QWidget):
             self.discover_btn.setEnabled(True)
             self._start_monitor(self._graph)
             self.view.save_map()
+            if hasattr(self, 'section_discovery'):
+                self.section_discovery.collapse()
         except Exception as exc:
             import traceback
             traceback.print_exc()

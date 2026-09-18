@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QPointF, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
@@ -112,6 +112,9 @@ class LayerTreeWidget(QWidget):
         self._eye_partial = make_eye_icon('partial')
 
         self._init_ui()
+
+    def sizeHint(self) -> QSize:
+        return QSize(260, 350)
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)

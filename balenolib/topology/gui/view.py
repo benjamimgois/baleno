@@ -33,6 +33,10 @@ from balenolib.topology.persistence import (
     apply_layout, load_layout, load_group_layout, save_layout, default_layout_path,
     save_map, load_map, default_map_path,
 )
+from balenolib.topology.undo import (
+    TopologyUndoStack, MoveNodeCommand, AddDeviceCommand,
+    RemoveDeviceCommand, AddLinkCommand,
+)
 
 __all__ = ['TopologyView', 'TopologyScene', 'NodeItem', 'EdgeItem',
            'GroupNodeItem', 'GroupLinkItem', 'load_graph', 'role_renderer']
@@ -367,6 +371,7 @@ class NodeItem(QGraphicsObject):
         self.device = device
         self.edges: list[EdgeItem] = []
         self._link_highlight = False
+        self._search_highlight = False
         # Level 2+ devices are less relevant: render smaller icons/fonts.
         self.scale = 1.0 if device.layer <= 1 else 0.72
         self.setFlags(
@@ -395,6 +400,11 @@ class NodeItem(QGraphicsObject):
     def set_link_highlight(self, on: bool) -> None:
         self._link_highlight = bool(on)
         self.update()
+
+    def set_search_highlight(self, on: bool) -> None:
+        if self._search_highlight != bool(on):
+            self._search_highlight = bool(on)
+            self.update()
 
     def mousePressEvent(self, event) -> None:
         scene = self.scene()
@@ -441,6 +451,12 @@ class NodeItem(QGraphicsObject):
             painter.setPen(QPen(QColor(255, 214, 0), 4))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(-5, -5, 5, 5), 14, 14)
+
+        # strong cyan ring when this node is highlighted by search
+        if self._search_highlight:
+            painter.setPen(QPen(QColor(0, 210, 255), 3.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(-6, -6, 6, 6), 14, 14)
 
         # left accent bar coloured by hop level (green = seed, gray = neighbour)
         lvl_color = level_color(self.device.layer)
@@ -842,6 +858,7 @@ class TopologyScene(QGraphicsScene):
         self._link_mode = False
         self._link_source: Optional[object] = None
         self._preview: Optional[QGraphicsPathItem] = None
+        self._drag_start_positions: dict[str, QPointF] = {}
         self.setBackgroundBrush(BG)
         self.setSceneRect(-20000, -20000, 40000, 40000)
 
@@ -1078,7 +1095,38 @@ class TopologyScene(QGraphicsScene):
                 self.set_link_mode(False)
                 event.accept()
                 return
+        selected_nodes = [i for i in self.selectedItems() if isinstance(i, NodeItem)]
+        if selected_nodes:
+            self._drag_start_positions = {n.device.id: QPointF(n.pos()) for n in selected_nodes}
+        else:
+            hit_nodes = [i for i in self.items(event.scenePos()) if isinstance(i, NodeItem)]
+            if hit_nodes:
+                self._drag_start_positions = {hit_nodes[0].device.id: QPointF(hit_nodes[0].pos())}
+            else:
+                self._drag_start_positions = {}
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        super().mouseReleaseEvent(event)
+        if self._drag_start_positions:
+            moves = []
+            for did, old_pos in self._drag_start_positions.items():
+                node = self.node_items.get(did)
+                if node is not None and (node.pos() - old_pos).manhattanLength() > 1.0:
+                    moves.append((did, old_pos, QPointF(node.pos())))
+            if moves:
+                views = self.views()
+                if views and hasattr(views[0], 'undo_stack'):
+                    stack = views[0].undo_stack
+                    if len(moves) == 1:
+                        did, old_pos, new_pos = moves[0]
+                        stack.push(MoveNodeCommand(views[0], did, old_pos, new_pos))
+                    else:
+                        stack.beginMacro('Move Nodes')
+                        for did, old_pos, new_pos in moves:
+                            stack.push(MoveNodeCommand(views[0], did, old_pos, new_pos))
+                        stack.endMacro()
+            self._drag_start_positions = {}
 
     def mouseMoveEvent(self, event) -> None:
         if self._link_mode:
@@ -1370,6 +1418,8 @@ class TopologyView(QGraphicsView):
         self._zoom = 1.0
         self.minimap = Minimap(self)
         self.nav_dock = NavigationOverlay(self)
+        self.nav_dock.setVisible(False)
+        self.undo_stack = TopologyUndoStack(self)
         self._legend = QLabel(self)
         self._legend.setTextFormat(Qt.TextFormat.RichText)
         self._legend.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -1627,6 +1677,60 @@ class TopologyView(QGraphicsView):
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
             self._zoom = self.transform().m11()
 
+    def zoom_reset(self) -> None:
+        """Reset view zoom to 100% (scale 1.0)."""
+        current_zoom = self.transform().m11()
+        if current_zoom != 0:
+            factor = 1.0 / current_zoom
+            self._zoom = 1.0
+            self.scale(factor, factor)
+
+    def highlight_matches(self, query: str) -> list[str]:
+        """Highlight nodes matching query (IP, label, vendor, model, etc.) and return IDs."""
+        q = query.strip().lower()
+        matched_ids: list[str] = []
+        for did, node in self._scene.node_items.items():
+            if not q:
+                node.set_search_highlight(False)
+                continue
+            dev = node.device
+            texts = [
+                dev.ip or '',
+                dev.label or '',
+                dev.vendor or '',
+                dev.model or '',
+                dev.role.value or '',
+                dev.chassis_id or '',
+            ]
+            for iface in dev.interfaces.values():
+                if iface.name:
+                    texts.append(iface.name)
+                if iface.descr:
+                    texts.append(iface.descr)
+                if iface.mac:
+                    texts.append(iface.mac)
+            match = any(q in t.lower() for t in texts if t)
+            node.set_search_highlight(match)
+            if match:
+                matched_ids.append(did)
+        return matched_ids
+
+    def focus_device(self, device_id: str) -> bool:
+        """Center the view on the specified device with a comfortable zoom level."""
+        node = self._scene.node_items.get(device_id)
+        if node is None:
+            return False
+        self.centerOn(node)
+        current_zoom = self.transform().m11()
+        target_zoom = 1.0
+        if current_zoom < 0.7 or current_zoom > 1.8:
+            factor = target_zoom / current_zoom
+            self._zoom = target_zoom
+            self.scale(factor, factor)
+        self._scene.clearSelection()
+        node.setSelected(True)
+        return True
+
     def fit_layer(self, layer_names: set[str] | str) -> None:
         """Fit view to nodes belonging to the specified layer(s)."""
         if isinstance(layer_names, str):
@@ -1688,20 +1792,17 @@ class TopologyView(QGraphicsView):
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
-    def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Escape and self._scene._link_mode:
-            self.set_link_mode(False)
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
     def add_manual_link(self, source_id: str, source_port: str,
                         target_id: str, target_port: str,
-                        speed: Optional[float] = None) -> Optional[str]:
+                        speed: Optional[float] = None,
+                        push_undo: bool = True) -> Optional[str]:
         """Create a manual link; returns an error message or None on success."""
         err = self._scene.add_manual_link(source_id, source_port,
                                           target_id, target_port, speed)
         if err is None:
+            if push_undo:
+                self.undo_stack.push(AddLinkCommand(
+                    self, source_id, source_port, target_id, target_port, speed))
             self._schedule_save()
         return err
 
@@ -1709,6 +1810,7 @@ class TopologyView(QGraphicsView):
         """Add a manually-placed device (from the palette) and wire its save."""
         device = self._scene.add_manual_device(role, pos)
         self._scene.node_items[device.id].moved.connect(self._schedule_save)
+        self.undo_stack.push(AddDeviceCommand(self, device, pos))
         self._schedule_save()
         return device
 
@@ -1730,13 +1832,24 @@ class TopologyView(QGraphicsView):
         self._scene._manual_counter = 0
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self._scene._link_mode:
+            self.set_link_mode(False)
+            event.accept()
+            return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            removed = False
-            for item in self._scene.selectedItems():
-                if isinstance(item, NodeItem):
-                    if self._scene.remove_node(item.device.id):
-                        removed = True
-            if removed:
+            nodes_to_remove = [item for item in self._scene.selectedItems() if isinstance(item, NodeItem)]
+            if nodes_to_remove:
+                self.undo_stack.beginMacro('Delete Devices')
+                for item in nodes_to_remove:
+                    dev = item.device
+                    pos = item.pos()
+                    connected_links = []
+                    if self._scene.graph is not None:
+                        connected_links = [l for l in self._scene.graph.links
+                                           if l.source_id == dev.id or l.target_id == dev.id]
+                    self._scene.remove_node(dev.id)
+                    self.undo_stack.push(RemoveDeviceCommand(self, dev, pos, connected_links))
+                self.undo_stack.endMacro()
                 self._schedule_save()
             return
         super().keyPressEvent(event)
