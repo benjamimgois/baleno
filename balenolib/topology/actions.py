@@ -118,9 +118,9 @@ class TopologyActions:
     # ── menu entry points ────────────────────────────────────────────────
 
     @staticmethod
-    def show_node_menu(main_window, device, pos) -> None:
-        """Show the context menu for a device node."""
-        TopologyActions._show_menu(main_window, device, pos, include_remove=True)
+    def show_node_menu(main_window, device, pos, target_devices: Optional[list] = None) -> None:
+        """Show the context menu for a device node (or multiple selected nodes)."""
+        TopologyActions._show_menu(main_window, device, pos, include_remove=True, target_devices=target_devices)
 
     @staticmethod
     def show_group_menu(main_window, group, pos) -> None:
@@ -128,10 +128,22 @@ class TopologyActions:
         device = group.graph.devices.get(group.parent_id) if group.graph else None
         if device is None:
             return
-        TopologyActions._show_menu(main_window, device, pos, include_remove=False)
+        TopologyActions._show_menu(main_window, device, pos, include_remove=False, target_devices=[device])
 
     @staticmethod
-    def _show_menu(main_window, device, pos, include_remove: bool) -> None:
+    def _show_menu(main_window, device, pos, include_remove: bool, target_devices: Optional[list] = None) -> None:
+        if target_devices is None:
+            topo_page = getattr(main_window, 'topology_page', None)
+            view = getattr(topo_page, 'view', None) if topo_page else None
+            if view is not None and hasattr(view, '_scene') and view._scene is not None:
+                from balenolib.topology.gui.view import NodeItem
+                selected_nodes = [item for item in view._scene.selectedItems() if isinstance(item, NodeItem)]
+                if any(item.device.id == device.id for item in selected_nodes):
+                    target_devices = [item.device for item in selected_nodes]
+        if not target_devices:
+            target_devices = [device]
+
+        count = len(target_devices)
         has_ip = bool(device.ip)
         menu = TopologyActions._dark_menu()
 
@@ -190,7 +202,8 @@ class TopologyActions:
         menu.addSeparator()
 
         # Device Type submenu
-        type_menu = menu.addMenu('Device Type')
+        type_title = 'Device Type' if count <= 1 else f'Device Type ({count} devices)'
+        type_menu = menu.addMenu(type_title)
         from balenolib.topology.models import DeviceRole
         from balenolib.topology.gui.view import make_role_icon
         from balenolib.topology.gui.layers import make_color_icon
@@ -217,12 +230,13 @@ class TopologyActions:
             if not icon.isNull():
                 act.setIcon(icon)
             act.setCheckable(True)
-            if device.role == role:
+            if all(d.role == role for d in target_devices):
                 act.setChecked(True)
             type_actions.append((act, role))
 
         # Layer submenu
-        layer_menu = menu.addMenu('Layer')
+        layer_title = 'Layer' if count <= 1 else f'Layer ({count} devices)'
+        layer_menu = menu.addMenu(layer_title)
         topo_page = getattr(main_window, 'topology_page', None)
         graph = getattr(topo_page, '_graph', None) if topo_page else None
         known_layers: set[str] = set()
@@ -242,7 +256,7 @@ class TopologyActions:
         for layer_name in sorted(known_layers):
             act = layer_menu.addAction(layer_name)
             act.setCheckable(True)
-            if layer_name in device.layers:
+            if all(layer_name in d.layers for d in target_devices):
                 act.setChecked(True)
             color_hex = None
             if topo_page and hasattr(topo_page, 'layer_tree'):
@@ -256,7 +270,8 @@ class TopologyActions:
         remove_act = None
         if include_remove:
             menu.addSeparator()
-            remove_act = menu.addAction('Remove')
+            rem_title = 'Remove' if count <= 1 else f'Remove ({count} devices)'
+            remove_act = menu.addAction(rem_title)
             remove_act.setIcon(TopologyActions._trash_icon())
 
         chosen = menu.exec(pos)
@@ -265,7 +280,7 @@ class TopologyActions:
         if chosen is ping_act:
             TopologyActions._invoke_ping(main_window, device)
         elif include_remove and chosen is remove_act:
-            TopologyActions._remove_node(main_window, device)
+            TopologyActions._remove_nodes(main_window, target_devices)
         elif chosen is a_ssh:
             TopologyActions._invoke_ssh(main_window, device, 'SSH')
         elif chosen is a_telnet:
@@ -297,52 +312,84 @@ class TopologyActions:
         else:
             for act, role in type_actions:
                 if chosen is act:
-                    TopologyActions._change_device_role(main_window, device, role)
+                    TopologyActions._change_devices_role(main_window, target_devices, role)
                     return
             if chosen is act_new_layer:
-                TopologyActions._move_device_to_new_layer(main_window, device)
+                TopologyActions._move_devices_to_new_layer(main_window, target_devices)
                 return
             for act, layer_name in layer_actions:
                 if chosen is act:
-                    TopologyActions._change_device_layer(main_window, device, layer_name)
+                    TopologyActions._change_devices_layer(main_window, target_devices, layer_name)
                     return
 
     # ── invokers ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _change_device_role(main_window, device, new_role: DeviceRole) -> None:
-        device.role = new_role
+    def _change_devices_role(main_window, devices: list[Any], new_role: DeviceRole) -> None:
+        if not devices:
+            return
         topo_page = getattr(main_window, 'topology_page', None)
         view = getattr(topo_page, 'view', None) if topo_page else None
-        if view is not None:
-            view.change_device_role(device.id, new_role)
+        dev_ids = [d.id for d in devices]
+
+        if view is not None and hasattr(view, 'change_devices_role'):
+            view.change_devices_role(dev_ids, new_role)
+        else:
+            for d in devices:
+                d.role = new_role
+                if view is not None:
+                    view.change_device_role(d.id, new_role)
+
         if topo_page is not None and hasattr(topo_page, 'layer_tree') and topo_page._graph is not None:
             topo_page.layer_tree.populate(topo_page._graph, topo_page._hidden_layers())
 
     @staticmethod
-    def _change_device_layer(main_window, device, new_layer: str) -> None:
+    def _change_device_role(main_window, device, new_role: DeviceRole) -> None:
+        TopologyActions._change_devices_role(main_window, [device], new_role)
+
+    @staticmethod
+    def _change_devices_layer(main_window, devices: list[Any], new_layer: str) -> None:
+        if not devices:
+            return
         import re
         m = re.search(r'-(\d+)$', new_layer)
-        device.layer = int(m.group(1)) if m else 1
-        device.layers = {new_layer}
+        layer_num = int(m.group(1)) if m else 1
+
         topo_page = getattr(main_window, 'topology_page', None)
         view = getattr(topo_page, 'view', None) if topo_page else None
-        if view is not None:
-            view.change_device_layer(device.id, new_layer)
+        dev_ids = [d.id for d in devices]
+
+        if view is not None and hasattr(view, 'change_devices_layer'):
+            view.change_devices_layer(dev_ids, new_layer)
+        else:
+            for d in devices:
+                d.layer = layer_num
+                d.layers = {new_layer}
+                if view is not None:
+                    view.change_device_layer(d.id, new_layer)
+
         if topo_page is not None and hasattr(topo_page, 'layer_tree') and topo_page._graph is not None:
             topo_page.layer_tree.populate(topo_page._graph, topo_page._hidden_layers())
             if view is not None:
                 view.set_visible_layers(topo_page.layer_tree._visible_layers)
 
     @staticmethod
-    def _move_device_to_new_layer(main_window, device) -> None:
+    def _change_device_layer(main_window, device, new_layer: str) -> None:
+        TopologyActions._change_devices_layer(main_window, [device], new_layer)
+
+    @staticmethod
+    def _move_devices_to_new_layer(main_window, devices: list[Any]) -> None:
+        if not devices:
+            return
         from PyQt6.QtWidgets import QInputDialog, QColorDialog
         from PyQt6.QtGui import QColor
 
+        count = len(devices)
+        title = 'Move to New Layer' if count <= 1 else f'Move {count} Devices to New Layer'
         name, ok = QInputDialog.getText(
-            main_window, 'Move to New Layer', 'New layer name:'
+            main_window, title, 'New layer name:'
         )
-        name = name.strip()
+        name = name.strip() if name else ''
         if not ok or not name:
             return
 
@@ -357,13 +404,25 @@ class TopologyActions:
                 topo_page._graph.layer_colors[name] = color_hex
             if hasattr(topo_page, 'layer_tree'):
                 topo_page.layer_tree.set_layer_color(name, color_hex)
-        TopologyActions._change_device_layer(main_window, device, name)
+        TopologyActions._change_devices_layer(main_window, devices, name)
+
+    @staticmethod
+    def _move_device_to_new_layer(main_window, device) -> None:
+        TopologyActions._move_devices_to_new_layer(main_window, [device])
+
+    @staticmethod
+    def _remove_nodes(main_window, devices: list[Any]) -> None:
+        view = getattr(getattr(main_window, 'topology_page', None), 'view', None)
+        if view is not None:
+            if hasattr(view, 'remove_nodes'):
+                view.remove_nodes(devices)
+            else:
+                for dev in devices:
+                    view.remove_node(dev)
 
     @staticmethod
     def _remove_node(main_window, device) -> None:
-        view = getattr(getattr(main_window, 'topology_page', None), 'view', None)
-        if view is not None:
-            view.remove_node(device)
+        TopologyActions._remove_nodes(main_window, [device])
 
     @staticmethod
     def _invoke_ping(main_window, device) -> None:

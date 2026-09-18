@@ -29,7 +29,7 @@ from balenolib.topology.worker import TopologyDiscoveryWorker
 from balenolib.topology.monitor import TrafficMonitor
 from balenolib.topology.models import Device, DeviceRole, TopologyGraph
 from balenolib.topology.gui.view import (
-    TopologyView, DEVICE_MIME, role_renderer, GroupNodeItem,
+    TopologyView, DEVICE_MIME, role_renderer, GroupNodeItem, NodeItem,
 )
 from balenolib.topology.gui.layers import LayerTreeWidget, make_color_icon
 from balenolib.topology.gui.accordion import AccordionWidget, CollapsibleSection
@@ -995,7 +995,12 @@ class TopologyTab(QWidget):
     def _on_node_context_menu(self, device, pos) -> None:
         if self._main is None:
             return
-        TopologyActions.show_node_menu(self._main, device, pos)
+        target_devices = None
+        if hasattr(self, 'view') and self.view and hasattr(self.view, '_scene') and self.view._scene:
+            selected_nodes = [item for item in self.view._scene.selectedItems() if isinstance(item, NodeItem)]
+            if any(item.device.id == device.id for item in selected_nodes):
+                target_devices = [item.device for item in selected_nodes]
+        TopologyActions.show_node_menu(self._main, device, pos, target_devices=target_devices)
 
     def _on_group_context_menu(self, group, pos) -> None:
         if self._main is None:

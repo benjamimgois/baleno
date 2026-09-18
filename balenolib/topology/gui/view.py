@@ -446,6 +446,11 @@ class NodeItem(QGraphicsObject):
         super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event) -> None:
+        if not self.isSelected():
+            scene = self.scene()
+            if scene is not None:
+                scene.clearSelection()
+            self.setSelected(True)
         self.context_menu_requested.emit(self.device, event.screenPos())
 
     def get_layer_color(self) -> Optional[str]:
@@ -2081,37 +2086,62 @@ class TopologyView(QGraphicsView):
 
     def change_device_role(self, device_id: str, new_role: DeviceRole) -> None:
         """Update role of a device and redraw its node."""
-        device = None
-        node = self._scene.node_items.get(device_id)
-        if node is not None:
-            device = node.device
-        elif self._scene.graph is not None:
-            device = self._scene.graph.devices.get(device_id)
-        if device is None:
-            return
-        device.role = new_role
-        if node is not None:
-            node.refresh_tooltip()
-            node.update()
-        self._schedule_save()
+        self.change_devices_role([device_id], new_role)
+
+    def change_devices_role(self, device_ids: list[str], new_role: DeviceRole) -> None:
+        """Update role of multiple devices and redraw their nodes."""
+        changed = False
+        for device_id in device_ids:
+            device = None
+            node = self._scene.node_items.get(device_id)
+            if node is not None:
+                device = node.device
+            elif self._scene.graph is not None:
+                device = self._scene.graph.devices.get(device_id)
+            if device is not None:
+                device.role = new_role
+                if node is not None:
+                    node.refresh_tooltip()
+                    node.update()
+                changed = True
+        if changed:
+            self._schedule_save()
 
     def change_device_layer(self, device_id: str, new_layer: str) -> None:
         """Move a device to a new layer, updating layers and redrawing node."""
-        device = None
-        node = self._scene.node_items.get(device_id)
-        if node is not None:
-            device = node.device
-        elif self._scene.graph is not None:
-            device = self._scene.graph.devices.get(device_id)
-        if device is None:
-            return
+        self.change_devices_layer([device_id], new_layer)
+
+    def change_devices_layer(self, device_ids: list[str], new_layer: str) -> None:
+        """Move multiple devices to a new layer, updating layers and redrawing nodes."""
+        import re
         m = re.search(r'-(\d+)$', new_layer)
-        device.layer = int(m.group(1)) if m else 1
-        device.layers = {new_layer}
-        if node is not None:
-            node.refresh_tooltip()
-            node.update()
-        self._schedule_save()
+        layer_num = int(m.group(1)) if m else 1
+        changed = False
+        for device_id in device_ids:
+            device = None
+            node = self._scene.node_items.get(device_id)
+            if node is not None:
+                device = node.device
+            elif self._scene.graph is not None:
+                device = self._scene.graph.devices.get(device_id)
+            if device is not None:
+                device.layer = layer_num
+                device.layers = {new_layer}
+                if node is not None:
+                    node.refresh_tooltip()
+                    node.update()
+                changed = True
+        if changed:
+            self._schedule_save()
+
+    def remove_nodes(self, devices: list[Device]) -> None:
+        """Remove multiple device nodes from the canvas and schedule an auto-save."""
+        changed = False
+        for dev in devices:
+            if self._scene.remove_node(dev.id):
+                changed = True
+        if changed:
+            self._schedule_save()
 
 
 

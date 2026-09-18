@@ -182,6 +182,53 @@ class TestDiscoveryModesAndLayers(unittest.TestCase):
         view.set_link_mode(False)
         self.assertEqual(view.dragMode(), QGraphicsView.DragMode.RubberBandDrag)
 
+    def test_batch_device_role_and_layer_mutation(self):
+        """Verify batch mutating layers and roles on multiple devices."""
+        from PyQt6.QtWidgets import QApplication
+        import sys
+        app = QApplication.instance() or QApplication(sys.argv)
+        from balenolib.topology.gui.view import TopologyView
+        from balenolib.topology.actions import TopologyActions
+
+        graph = TopologyGraph()
+        dev1 = Device(id='d1', role=DeviceRole.ROUTER, layers={'Net-A'}, layer=1)
+        dev2 = Device(id='d2', role=DeviceRole.SWITCH, layers={'Net-A'}, layer=1)
+        dev3 = Device(id='d3', role=DeviceRole.HOST, layers={'Net-B'}, layer=1)
+        graph.devices['d1'] = dev1
+        graph.devices['d2'] = dev2
+        graph.devices['d3'] = dev3
+
+        view = TopologyView()
+        view.load(graph)
+
+        # Batch change layer for d1 and d2
+        view.change_devices_layer(['d1', 'd2'], 'VLAN-50-3')
+        self.assertEqual(dev1.layers, {'VLAN-50-3'})
+        self.assertEqual(dev1.layer, 3)
+        self.assertEqual(dev2.layers, {'VLAN-50-3'})
+        self.assertEqual(dev2.layer, 3)
+        # d3 should remain unchanged
+        self.assertEqual(dev3.layers, {'Net-B'})
+        self.assertEqual(dev3.layer, 1)
+
+        # Batch change role for d1 and d2
+        view.change_devices_role(['d1', 'd2'], DeviceRole.FIREWALL)
+        self.assertEqual(dev1.role, DeviceRole.FIREWALL)
+        self.assertEqual(dev2.role, DeviceRole.FIREWALL)
+        self.assertEqual(dev3.role, DeviceRole.HOST)
+
+        # Test TopologyActions batch layer helper
+        mock_main = MagicMock()
+        mock_topo_page = MagicMock()
+        mock_topo_page.view = view
+        mock_topo_page._graph = graph
+        mock_main.topology_page = mock_topo_page
+
+        TopologyActions._change_devices_layer(mock_main, [dev1, dev2, dev3], 'All-Net')
+        self.assertEqual(dev1.layers, {'All-Net'})
+        self.assertEqual(dev2.layers, {'All-Net'})
+        self.assertEqual(dev3.layers, {'All-Net'})
+
 
 if __name__ == '__main__':
     unittest.main()
